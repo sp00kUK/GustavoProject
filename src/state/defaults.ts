@@ -114,3 +114,124 @@ export const DIMENSION_PRESETS: DimensionPreset[] = [
     cylinder: { diameter: 40, height: 40, boreEnabled: false, boreDiameter: 8 },
   },
 ];
+
+/**
+ * Playtested workflow presets for small logos, organic wave relief,
+ * convex cobblestones, terraced contours, and raised stamps.
+ */
+export interface ReliefWorkflowPreset {
+  id: string;
+  labelKey: string;
+  relief: Partial<ReliefSettings>;
+  pattern?: Partial<PatternSettings>;
+  quality?: Partial<QualitySettings>;
+}
+
+export const RELIEF_PRESETS: ReliefWorkflowPreset[] = [
+  {
+    id: 'intricateLogo',
+    labelKey: 'preset.intricateLogo',
+    relief: {
+      depth: 0.4,
+      direction: 'deboss',
+      edgeTreatment: 'sharp',
+      edgeSoftness: 0,
+    },
+    pattern: {
+      mode: 'binary',
+      tileFit: 'fit',
+      quantize: 0,
+    },
+    quality: {
+      preview: 'ultra',
+      export: 'ultra',
+    },
+  },
+  {
+    id: 'organicWaves',
+    labelKey: 'preset.organicWaves',
+    relief: {
+      depth: 1.0,
+      direction: 'deboss',
+      edgeTreatment: 'soft',
+      edgeSoftness: 0.2,
+    },
+    pattern: {
+      mode: 'grayscale',
+      gamma: 1.0,
+      blackPoint: 0.05,
+      whitePoint: 0.95,
+      blur: 0.5,
+      quantize: 0,
+    },
+    quality: {
+      preview: 'ultra',
+      export: 'ultra',
+    },
+  },
+  {
+    id: 'pillowedCobble',
+    labelKey: 'preset.pillowedCobble',
+    relief: {
+      depth: 1.2,
+      direction: 'deboss',
+      edgeTreatment: 'soft',
+      edgeSoftness: 0.1,
+    },
+    pattern: {
+      mode: 'grayscale',
+      gamma: 1.8,
+      blackPoint: 0.05,
+      whitePoint: 0.95,
+      blur: 0,
+      quantize: 0,
+    },
+    quality: {
+      preview: 'high',
+      export: 'ultra',
+    },
+  },
+  {
+    id: 'terracedContours',
+    labelKey: 'preset.terracedContours',
+    relief: {
+      depth: 0.8,
+      direction: 'deboss',
+      edgeTreatment: 'sharp',
+      edgeSoftness: 0,
+    },
+    pattern: {
+      mode: 'grayscale',
+      gamma: 1.0,
+      blackPoint: 0.0,
+      whitePoint: 1.0,
+      blur: 0,
+      quantize: 8,
+    },
+    quality: {
+      preview: 'ultra',
+      export: 'ultra',
+    },
+  },
+  {
+    id: 'raisedBadge',
+    labelKey: 'preset.raisedBadge',
+    relief: {
+      depth: 0.5,
+      direction: 'emboss',
+      edgeTreatment: 'sharp',
+      edgeSoftness: 0,
+    },
+    pattern: {
+      mode: 'binary',
+      tileFit: 'fit',
+      quantize: 0,
+    },
+    quality: {
+      preview: 'ultra',
+      export: 'ultra',
+    },
+  },
+];
+
+

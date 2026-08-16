@@ -117,6 +117,11 @@ export const en = {
   'preset.grip': 'Tool grip sleeve',
   'preset.stamp': 'Stamp barrel',
   'preset.customLabel': 'Custom',
+  'preset.intricateLogo': 'Intricate Logo & Star Crest (0.4mm Sharp)',
+  'preset.organicWaves': 'Smooth Waves & Terrain (1.0mm Continuous)',
+  'preset.pillowedCobble': 'Pillowed Cobblestone (1.2mm Convex Dome)',
+  'preset.terracedContours': 'Terraced Topography (8-Step Stepped)',
+  'preset.raisedBadge': 'Raised Stamp & Badge (0.5mm Emboss)',
 
   'pattern.dropHere': 'Drop artwork here, or click to browse',
   'pattern.formats': 'PNG, JPG, WEBP or SVG',
@@ -171,11 +176,11 @@ export const en = {
 
   'stage.pattern': 'Preparing pattern',
   'stage.surface': 'Generating cylindrical topology',
-  'stage.caps': 'Closing end caps',
-  'stage.cleanup': 'Cleaning geometry',
+  'stage.caps': 'Closing caps',
+  'stage.cleanup': 'Cleaning up geometry',
   'stage.validation': 'Validating mesh',
   'stage.writing': 'Writing file',
-  'stage.done': 'Done',
+  'stage.done': 'Complete',
 
   'validation.closed': 'Closed mesh',
   'validation.winding': 'Consistent outward normals',
@@ -183,19 +188,19 @@ export const en = {
   'validation.wall': 'Wall thickness valid',
   'validation.dimensions': 'Dimensions valid',
   'validation.ready': 'Ready to export',
-  'validation.pending': 'Not generated yet',
+  'validation.pending': 'Not yet generated',
 
   'warning.nyquist':
     'Pattern contains finer detail than the current mesh resolution. Increase Mesh Detail for a sharper export.',
   'warning.lowRes':
     'Low-resolution pattern. Fine details may appear pixelated in the generated geometry.',
-  'warning.seam': 'This image may show visible repetition seams.',
+  'warning.seam': 'This artwork may show visible seams when repeated.',
   'warning.thinFeature':
-    'Relief features below about 0.4 mm may not reproduce clearly with a typical 0.4 mm nozzle. Resin printers can go much finer.',
+    'Features smaller than about 0.4 mm may not resolve cleanly on a typical 0.4 mm nozzle. Resin printers can resolve much finer detail.',
   'warning.deepCavity':
-    'Very deep, narrow cavities may be difficult to print cleanly and hard to release from clay.',
+    'Very deep, narrow cavities may be difficult to print cleanly and difficult to release from clay.',
   'warning.largeImage':
-    'This image is {width} x {height} pixels and may require significant memory. It has been downsampled to {target} px for processing.',
+    'Artwork is {width} x {height} px and may require significant memory. Downsampled to {target} px for processing.',
   'warning.largeExport':
     '{quality} quality will generate approximately {triangles} triangles ({size}) and may require significant memory. Continue?',
   'warning.noPattern': 'Load a pattern to carve. Right now the roller is blank.',
@@ -288,22 +293,24 @@ export const en = {
   'issue.OPEN_EDGES':
     'The shell has {count} open edge(s), so it does not enclose a solid volume. A slicer would ask to repair this model.',
   'issue.NON_MANIFOLD_EDGES':
-    '{count} edge(s) are shared by more than two faces. This usually means pattern detail is finer than the mesh can represent - increase Mesh Detail or reduce pattern repeats.',
+    '{count} edge(s) are shared by more than two faces. This usually means the pattern has finer detail than the mesh can resolve: increase Mesh Detail or reduce repetitions.',
   'issue.INCONSISTENT_WINDING':
-    '{count} edge(s) are traversed the same way by both of their faces, so surface normals disagree.',
-  'issue.INVERTED_SHELL': 'The shell is inside out - every normal points into the material.',
+    '{count} edge(s) are traversed in the same direction by both of their faces, so normals do not match.',
+  'issue.INVERTED_SHELL':
+    'The shell is inside out: all normals point inward toward the material.',
   'issue.DEGENERATE_TRIANGLES': '{count} triangle(s) have zero area.',
   'issue.DUPLICATE_TRIANGLES': '{count} triangle(s) are duplicated.',
-  'issue.ISOLATED_VERTICES': '{count} vertex/vertices are not referenced by any triangle.',
+  'issue.ISOLATED_VERTICES':
+    '{count} vertex/vertices are not referenced by any triangle.',
   'issue.NON_FINITE_VERTEX': '{count} vertex position(s) are NaN or infinite.',
   'issue.UNRESOLVED_PINCH':
-    '{count} location(s) where the pattern is finer than a single mesh cell could not be separated. Increase Mesh Detail or reduce pattern repeats.',
+    'Could not resolve {count} pinch point(s) where the pattern is thinner than a single mesh cell. Increase Mesh Detail or reduce repetitions.',
 
   'units.mm': 'mm',
   'units.deg': '°',
   'units.px': 'px',
   'units.percent': '%',
-} as const;
+};
 
-export type TranslationKey = keyof typeof en;
-export type Dictionary = Record<TranslationKey, string>;
+export type Dictionary = typeof en;
+export type TranslationKey = keyof Dictionary;

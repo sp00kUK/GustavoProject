@@ -117,6 +117,11 @@ export const es: Dictionary = {
   'preset.grip': 'Funda para mango de herramienta',
   'preset.stamp': 'Cilindro para sellos',
   'preset.customLabel': 'Personalizado',
+  'preset.intricateLogo': 'Logo intrincado y escudo (0.4mm Nítido)',
+  'preset.organicWaves': 'Ondas suaves y terreno (1.0mm Continuo)',
+  'preset.pillowedCobble': 'Adoquín redondeado (1.2mm Domo convexo)',
+  'preset.terracedContours': 'Topografía en terrazas (8 niveles)',
+  'preset.raisedBadge': 'Sello y emblema en relieve (0.5mm Realce)',
 
   'pattern.dropHere': 'Arrastra el diseño aquí, o haz clic para elegir un archivo',
   'pattern.formats': 'PNG, JPG, WEBP o SVG',

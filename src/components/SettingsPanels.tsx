@@ -1,6 +1,6 @@
-import { useI18n } from '../i18n';
+import { useI18n, type TranslationKey } from '../i18n';
 import { useStore } from '../state/store';
-import { DIMENSION_PRESETS } from '../state/defaults';
+import { DIMENSION_PRESETS, RELIEF_PRESETS } from '../state/defaults';
 import { maxSafeDepth, validateSettings } from '../geometry/constraints';
 import { QUALITY_SPACING_MM } from '../geometry/quality';
 import {
@@ -266,13 +266,52 @@ export function ReliefSection() {
   const relief = useStore((s) => s.settings.relief);
   const cylinder = useStore((s) => s.settings.cylinder);
   const update = useStore((s) => s.updateRelief);
+  const updatePattern = useStore((s) => s.updatePattern);
+  const updateQuality = useStore((s) => s.updateQuality);
+  const pattern = useStore((s) => s.settings.pattern);
 
   const check = validateSettings(cylinder, relief);
   const blocked = check.issues.find((i) => i.code === 'DEPTH_BREACHES_BORE');
   const safe = maxSafeDepth(cylinder, relief.direction);
 
+  const activePreset =
+    RELIEF_PRESETS.find((p) => {
+      const matchRelief =
+        (p.relief.depth === undefined || p.relief.depth === relief.depth) &&
+        (p.relief.direction === undefined || p.relief.direction === relief.direction) &&
+        (p.relief.edgeTreatment === undefined || p.relief.edgeTreatment === relief.edgeTreatment) &&
+        (p.relief.edgeSoftness === undefined || p.relief.edgeSoftness === relief.edgeSoftness);
+      const matchPattern =
+        !p.pattern ||
+        ((p.pattern.mode === undefined || p.pattern.mode === pattern.mode) &&
+          (p.pattern.gamma === undefined || p.pattern.gamma === pattern.gamma) &&
+          (p.pattern.blur === undefined || p.pattern.blur === pattern.blur) &&
+          (p.pattern.quantize === undefined || p.pattern.quantize === pattern.quantize));
+      return matchRelief && matchPattern;
+    })?.id ?? 'custom';
+
+
   return (
     <Section title={t('section.relief')}>
+      <SelectField
+        label={t('field.preset')}
+        value={activePreset}
+        options={[
+          { value: 'custom', label: t('preset.customLabel') },
+          ...RELIEF_PRESETS.map((p) => ({
+            value: p.id,
+            label: t(p.labelKey as TranslationKey),
+          })),
+        ]}
+        onChange={(id) => {
+          const preset = RELIEF_PRESETS.find((p) => p.id === id);
+          if (preset) {
+            if (preset.relief) update(preset.relief);
+            if (preset.pattern) updatePattern(preset.pattern);
+            if (preset.quality) updateQuality(preset.quality);
+          }
+        }}
+      />
       <Segmented<ReliefDirection>
         label={t('field.direction')}
         value={relief.direction}
