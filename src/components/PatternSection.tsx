@@ -260,38 +260,29 @@ export function PatternSection() {
             decimals={0}
             unit={t('units.px')}
           />
-          <Toggle
-            label={t('field.vectorize')}
-            checked={patternSettings.vectorize}
-            onChange={(vectorize) => update({ vectorize })}
+          <SliderField
+            label={t('field.vectorizeSmoothness')}
+            value={patternSettings.vectorizeSmoothness}
+            onChange={(vectorizeSmoothness) => update({ vectorizeSmoothness })}
+            min={0.1}
+            max={3}
+            step={0.1}
+            decimals={1}
+            unit="px"
             hint={t('tooltip.vectorize')}
           />
-          {patternSettings.vectorize && (
-            <>
-              <SliderField
-                label={t('field.vectorizeSmoothness')}
-                value={patternSettings.vectorizeSmoothness}
-                onChange={(vectorizeSmoothness) => update({ vectorizeSmoothness })}
-                min={0.1}
-                max={3}
-                step={0.1}
-                decimals={1}
-                unit="px"
-              />
-              <SliderField
-                label={t('field.vectorizeCornerThreshold')}
-                value={patternSettings.vectorizeCornerThreshold}
-                onChange={(vectorizeCornerThreshold) =>
-                  update({ vectorizeCornerThreshold: Math.round(vectorizeCornerThreshold) })
-                }
-                min={20}
-                max={120}
-                step={1}
-                decimals={0}
-                unit={t('units.deg')}
-              />
-            </>
-          )}
+          <SliderField
+            label={t('field.vectorizeCornerThreshold')}
+            value={patternSettings.vectorizeCornerThreshold}
+            onChange={(vectorizeCornerThreshold) =>
+              update({ vectorizeCornerThreshold: Math.round(vectorizeCornerThreshold) })
+            }
+            min={20}
+            max={120}
+            step={1}
+            decimals={0}
+            unit={t('units.deg')}
+          />
         </>
       ) : null}
 

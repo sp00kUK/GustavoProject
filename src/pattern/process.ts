@@ -65,7 +65,8 @@ export function processPattern(
     if (settings.despeckle > 0) despeckle(mask, width, height, settings.despeckle);
 
     // Auto-vectorize with sub-pixel curve fitting (VectorMagic / Potrace style)
-    if (settings.vectorize) {
+    // Runs automatically on all raster images to eliminate staircasing/pixelation.
+    if (raw.kind === 'raster' && settings.vectorize !== false) {
       const vecRes = autoVectorize(mask, width, height, {
         smoothness: settings.vectorizeSmoothness ?? 0.8,
         cornerAngleDeg: settings.vectorizeCornerThreshold ?? 55,

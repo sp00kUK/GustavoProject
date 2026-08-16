@@ -104,6 +104,12 @@ Para evitar discontinuidades donde el grabado llega a los extremos superior o in
 ### Orificio Central / Eje (`bore.ts`)
 Geometría cilíndrica interior real (no una sustracción booleana). Las normales apuntan hacia el eje central ("hacia afuera del material"), garantizando compatibilidad total con laminadores 3D.
 
+### Auto-Vectorizador Automático (`vectorizer.ts`)
+Convierte automáticamente cualquier imagen de mapa de bits (PNG, JPG, WebP) en curvas matemáticas Bézier continuas ($C^1$) preservando esquinas vivas (puntas de estrellas, escudos, letras):
+- **100% Automático**: Activo por defecto para todas las imágenes en modo binario (sin necesidad de activarlo manualmente).
+- **Control de Curvas**: Parámetros de suavizado de curvas y ángulo de esquinas vivas disponibles directamente en la interfaz.
+- **Documentación Técnica para Codex/WASM**: Consulta [docs/VECTORIZER_HANDOFF.md](docs/VECTORIZER_HANDOFF.md) para la especificación matemática completa y la guía de compilación de módulos WebAssembly (Rust/C++).
+
 ---
 
 ## Orden de Transformación UV
