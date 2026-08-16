@@ -36,4 +36,6 @@ export interface ProcessedPattern {
   binary: boolean;
   /** Hash of the inputs that produced it, for cache invalidation. */
   signature: string;
+  /** Vectorized SVG string if auto-vectorization was run */
+  vectorSvg?: string;
 }

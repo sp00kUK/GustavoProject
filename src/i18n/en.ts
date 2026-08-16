@@ -56,6 +56,9 @@ export const en = {
   'field.invert': 'Invert pattern',
   'field.threshold': 'Threshold',
   'field.despeckle': 'Despeckle',
+  'field.vectorize': 'Auto-vectorize (VectorMagic tracing)',
+  'field.vectorizeSmoothness': 'Vector smoothness',
+  'field.vectorizeCornerThreshold': 'Corner sharpness angle',
   'field.brightness': 'Brightness',
   'field.contrast': 'Contrast',
   'field.gamma': 'Gamma',
@@ -122,6 +125,7 @@ export const en = {
   'pattern.source': 'Source',
   'pattern.original': 'Original',
   'pattern.processed': 'Processed',
+  'pattern.vectorized': 'Vectorized (SVG)',
   'pattern.tilePreview': 'Tiling preview',
   'pattern.tileSize': 'Tile size',
   'pattern.examples': 'Example patterns',
@@ -238,6 +242,8 @@ export const en = {
     'How the roller is laid out in the exported file. Exports are Z-up, which is what slicers expect.',
   'tooltip.tileFit':
     'How the source image maps into one repeat tile when its proportions differ from the tile.',
+  'tooltip.vectorize':
+    'Converts pixelated raster images into smooth mathematical Bézier curves (VectorMagic technology), preserving sharp star tips and arcs without quality loss.',
 
   'help.title': 'Getting started',
   'help.step1': 'Set your roller dimensions.',

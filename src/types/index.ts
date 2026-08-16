@@ -77,6 +77,13 @@ export interface PatternSettings {
   mirrorX: boolean;
   mirrorY: boolean;
 
+  /** Auto-vectorize raster images with VectorMagic-style smooth curve tracing. */
+  vectorize: boolean;
+  /** Vectorizer smoothing tolerance (0.1 - 4.0 px, default 0.8) */
+  vectorizeSmoothness: number;
+  /** Vectorizer corner preservation angle in degrees (default 55 deg) */
+  vectorizeCornerThreshold: number;
+
   /** Brick-style row shift, 0..1 of one tile width. */
   stagger: number;
   staggerMode: StaggerMode;

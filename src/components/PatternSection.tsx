@@ -9,7 +9,7 @@ import { tileSizeMm } from '../pattern/sampler';
 import { NumberField, Section, Segmented, SliderField, Toggle } from './controls';
 import type { RawPattern } from '../pattern/types';
 
-type PreviewMode = 'original' | 'processed' | 'tiled';
+type PreviewMode = 'original' | 'processed' | 'vector' | 'tiled';
 
 export function PatternSection() {
   const { t, n } = useI18n();
@@ -137,6 +137,7 @@ export function PatternSection() {
             options={[
               { value: 'original', label: t('pattern.original') },
               { value: 'processed', label: t('pattern.processed') },
+              { value: 'vector', label: t('pattern.vectorized') },
               { value: 'tiled', label: t('pattern.tilePreview') },
             ]}
             onChange={setPreviewMode}
@@ -203,6 +204,38 @@ export function PatternSection() {
             decimals={0}
             unit={t('units.px')}
           />
+          <Toggle
+            label={t('field.vectorize')}
+            checked={patternSettings.vectorize}
+            onChange={(vectorize) => update({ vectorize })}
+            hint={t('tooltip.vectorize')}
+          />
+          {patternSettings.vectorize && (
+            <>
+              <SliderField
+                label={t('field.vectorizeSmoothness')}
+                value={patternSettings.vectorizeSmoothness}
+                onChange={(vectorizeSmoothness) => update({ vectorizeSmoothness })}
+                min={0.1}
+                max={3}
+                step={0.1}
+                decimals={1}
+                unit="px"
+              />
+              <SliderField
+                label={t('field.vectorizeCornerThreshold')}
+                value={patternSettings.vectorizeCornerThreshold}
+                onChange={(vectorizeCornerThreshold) =>
+                  update({ vectorizeCornerThreshold: Math.round(vectorizeCornerThreshold) })
+                }
+                min={20}
+                max={120}
+                step={1}
+                decimals={0}
+                unit={t('units.deg')}
+              />
+            </>
+          )}
         </>
       ) : null}
 
@@ -330,9 +363,16 @@ function PatternCanvas({ pattern, mode }: { pattern: RawPattern; mode: PreviewMo
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const settings = useStore((s) => s.settings.pattern);
 
+  const effectiveSettings = useMemo(() => {
+    if (mode === 'vector') {
+      return { ...settings, vectorize: true };
+    }
+    return settings;
+  }, [settings, mode]);
+
   const processed = useMemo(
-    () => (mode === 'original' ? null : processPattern(pattern, settings)),
-    [pattern, settings, mode],
+    () => (mode === 'original' ? null : processPattern(pattern, effectiveSettings)),
+    [pattern, effectiveSettings, mode],
   );
 
   useEffect(() => {
@@ -342,6 +382,27 @@ function PatternCanvas({ pattern, mode }: { pattern: RawPattern; mode: PreviewMo
     if (!ctx) return;
 
     const { width, height } = pattern;
+    const repeats = mode === 'tiled' ? 3 : 1;
+    canvas.width = PREVIEW_SIZE;
+    canvas.height = PREVIEW_SIZE;
+    ctx.clearRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
+
+    if (mode === 'vector' && processed?.vectorSvg) {
+      // Render smooth vector SVG curves
+      const img = new Image();
+      const svgBlob = new Blob([processed.vectorSvg], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+      img.onload = () => {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(img, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+      return;
+    }
+
     const source = ctx.createImageData(width, height);
     for (let i = 0; i < width * height; i++) {
       let value: number;
@@ -362,11 +423,7 @@ function PatternCanvas({ pattern, mode }: { pattern: RawPattern; mode: PreviewMo
     bitmapCanvas.height = height;
     bitmapCanvas.getContext('2d')!.putImageData(source, 0, 0);
 
-    const repeats = mode === 'tiled' ? 3 : 1;
-    canvas.width = PREVIEW_SIZE;
-    canvas.height = PREVIEW_SIZE;
     ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
 
     const cell = PREVIEW_SIZE / repeats;
     for (let y = 0; y < repeats; y++) {

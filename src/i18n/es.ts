@@ -56,6 +56,9 @@ export const es: Dictionary = {
   'field.invert': 'Invertir patrón',
   'field.threshold': 'Umbral',
   'field.despeckle': 'Quitar motas',
+  'field.vectorize': 'Auto-vectorizar (Trazo vectorial tipo VectorMagic)',
+  'field.vectorizeSmoothness': 'Suavizado de curvas',
+  'field.vectorizeCornerThreshold': 'Ángulo de esquinas vivas',
   'field.brightness': 'Brillo',
   'field.contrast': 'Contraste',
   'field.gamma': 'Gamma',
@@ -122,6 +125,7 @@ export const es: Dictionary = {
   'pattern.source': 'Origen',
   'pattern.original': 'Original',
   'pattern.processed': 'Procesado',
+  'pattern.vectorized': 'Vectorizado (SVG)',
   'pattern.tilePreview': 'Vista previa del mosaico',
   'pattern.tileSize': 'Tamaño del mosaico',
   'pattern.examples': 'Patrones de ejemplo',
@@ -239,6 +243,8 @@ export const es: Dictionary = {
     'Cómo se coloca el rodillo en el archivo exportado. Las exportaciones usan Z hacia arriba, que es lo que esperan los laminadores.',
   'tooltip.tileFit':
     'Cómo se ajusta la imagen de origen dentro de un mosaico cuando sus proporciones son distintas a las del mosaico.',
+  'tooltip.vectorize':
+    'Convierte imágenes rasterizadas en curvas matemáticas Bézier continuas (tecnología tipo VectorMagic), manteniendo las puntas de estrellas y letras nítidas sin pixelación.',
 
   'help.title': 'Primeros pasos',
   'help.step1': 'Define las dimensiones de tu rodillo.',
