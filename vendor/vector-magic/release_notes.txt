@@ -1,0 +1,86 @@
+Version 1.15, released August 30, 2010
+  * Fixed batch processing bug.
+
+Version 1.14, released June 12, 2009
+  * Fixed bitmap exporting bug for JPEG and TIF formats on PC.
+
+Version 1.13, released May 26, 2009
+  * Added background removal feature.
+  * Fixed several small cosmetic bugs.
+  * Improved button text to be more clear.
+  * Redesigned the palette selection page to be more clear.
+
+Version 1.12, released March 23, 2009
+  * Added batch processing feature.
+  * Fixed numerous small cosmetic bugs.
+  * Revised and improved internationalization.
+
+Version 1.11, released February 25, 2009
+  * Added Spanish language support.
+  * Added support for unicode filenames in import and export.
+  * Minor cosmetic revisions.         
+
+Version 1.10, released February 14, 2009
+  * Added support for AI, EMF, and DXF file formats.
+  * Added export options whether to stroke shape boundaries, how to arrange
+    the shapes, whether to group by color, and whether to use splines in the
+    DXF output.
+  * Switched to a more generally compatible EPS format.
+  * Added exception handling for file write errors during export process.
+  * Fixed numerous small cosmetic bugs.        
+
+Version 1.09, released December 2, 2008
+  * Added XPM support.
+  * Fixed bug in automatic locale-based language mode selection.  
+
+Version 1.08, released November 4, 2008
+  * Added language support for German, French, and Italian.
+  * Fixed bug when reading images encoded in CMYK. 
+  * Fixed some minor cosmetic bugs.
+
+Version 1.07, released September 29, 2008
+  * Switched to case-insensitive product keys to simplify typing. 
+
+Version 1.06, released September 23, 2008
+  * Show percent progress in title bar so that it is visible when the 
+    application is minimized.
+  * Allow drag-and-drop of image files onto application icon to start the 
+    application with that image.
+  * Made pencil tool faster and so that it doesn't skip pixels along the mouse 
+    cursor's path.
+  * Fixed bug where it was possible to change the page during processing by 
+    clicking and holding the update or back buttons before an auto-update was 
+    initialized and then releasing afterwards.
+  * Fixed bug where the following led to a crash: cancelling in the middle of 
+    the path smoothing or Bezier fitting phases of a fully-automatic job, and 
+    then running fully-automatic again.
+  * Removed spurious comma in about box for registered users without an 
+    associated organization.
+  * Updated help file with change to the "Update" button's text.          
+
+Version 1.05, released September 18, 2008
+  * Added manual activation support. 
+  * Fixed the active spot in the mouse cursors used in the segmentation editor.
+  * Fixed a minor styling issue with the file load progress dialog.
+
+Version 1.04, skipped to stay in sync with Mac version
+
+Version 1.03, released August 26, 2008
+  * Fixed bug in aliased segmentation algorithm that resulted in mistaken color
+    assignments.
+  * Added tooltip for update button.
+  * Fixed race condition in the advanced palette editor.
+  * Fixed troubleshooting text for fixed and flexible palette cases.
+
+Version 1.02, released July 17, 2008
+  * Changed from SSE2 to SSE to be compatible with older AMD chips.
+  * Turned off bicubic interpolation in drawing bitmaps to improve drawing 
+    speed.
+
+Version 1.01, released July 16, 2008
+  * Fixed bug in the output for transparent images (the transparency was lost 
+    before).
+  * Updated sample output to reflect this bugfix.
+
+Version 1.0, released July 15, 2008
+  * Original release.

@@ -19,22 +19,12 @@ That tree contains 47 files totaling 24,988,890 bytes. It was compared against
 differences. A native smoke test launched the repo-local executable and produced
 a complete 11,228-character SVG with no lingering `vmde.exe` process.
 
-## Important push boundary
-
-Do **not** force-add or push `vendor/vector-magic/`. Its bundled
-`license.txt` grants personal, non-transferable use, permits reasonable backup
-copies, and restricts copying/distribution of the software. The directory is
-therefore intentionally covered by `.gitignore`. `vendor/README.md` is the
-tracked setup note.
-
-If the user later supplies explicit redistribution authorization from the
-rights holder, handle that as a separate decision. Until then, a normal clone
-must use its own licensed local copy via `vendor/vector-magic/`,
-`VECTOR_MAGIC_EXE`, or a standard Program Files installation.
-
-The original Program Files tree still existed at final inspection. An attempted
-non-elevated move was denied by Windows, so the local repo tree is a verified
-copy rather than the only remaining installation.
+## Bundled Vector Magic Runtime
+ 
+Per explicit user request ("ship it with all vectormagic files, gustavo has none"),
+the complete 47-file `vendor/vector-magic/` runtime is tracked and shipped in the
+repository so that Gustavo can run the debosser with full Vector Magic automation
+immediately upon cloning without manual installation.
 
 ## Main implementation files
 

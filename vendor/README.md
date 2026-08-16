@@ -1,14 +1,14 @@
-# Local Vector Magic runtime
+# Bundled Vector Magic Desktop Runtime
 
-Place a licensed Vector Magic Desktop runtime at `vendor/vector-magic/` when
-you want the local Vite bridge to use a repository-adjacent copy. That directory
-is intentionally ignored by Git because Vector Magic's bundled EULA does not
-grant redistribution rights.
+This directory contains the verified Vector Magic Desktop Edition 1.15 runtime
+at `vendor/vector-magic/` so that Gustavo has the complete vectorization engine
+available out-of-the-box on Windows without needing a separate installation.
 
-Executable discovery order is:
+Executable discovery order in the Vite bridge is:
 
-1. `VECTOR_MAGIC_EXE`
-2. `vendor/vector-magic/vmde.exe`
-3. the standard Program Files locations
+1. `VECTOR_MAGIC_EXE` (environment variable override)
+2. `vendor/vector-magic/vmde.exe` (repo-bundled runtime)
+3. Standard Program Files locations (`C:\Program Files (x86)\Vector Magic\vmde.exe`)
 
-The Vite build does not copy this directory into `dist/`.
+The Vite client build does not copy this native directory into `dist/`.
+

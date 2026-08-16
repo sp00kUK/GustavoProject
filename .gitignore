@@ -12,7 +12,3 @@ Thumbs.db
 coverage
 fixtures-out
 *.tsbuildinfo
-
-# Local licensed Vector Magic Desktop runtime. Its EULA permits backup copies
-# but does not grant redistribution rights; never stage it accidentally.
-/vendor/vector-magic/
