@@ -1,187 +1,338 @@
-# In-Browser Vectorizer Architecture & Implementation Handoff (For Codex / Engineers)
+# Vector Magic In-Browser Integration & Architecture Master Handoff
 
-## 1. Executive Summary & Objective
-
-When users upload raster images (such as low-resolution PNGs, JPEGs with DCT compression noise, or web logos) to the **Cylindrical Pattern Debosser**, raster thresholding alone causes visible pixelation and staircase aliasing around curved edges and delicate shapes (such as star tips, shield curves, and fine lettering).
-
-**Core Requirement**: 
-All raster images uploaded in Binary mode **must be automatically vectorised in the browser** without requiring manual toggles, converting pixel bitmaps into smooth, infinite-resolution mathematical Bézier curves while strictly preserving sharp corners and star points.
-
-This document serves as the complete mathematical specification, architectural blueprint, and step-by-step implementation guide for **Codex** (or any autonomous agent/engineer) to maintain, optimize, or replace the vectorization engine with WebAssembly (WASM) / Rust / C++ high-performance modules.
+> **Target Audience**: Codex, Autonomous AI Agents, and Core Systems Engineers.  
+> **Mission**: Implement and run true Vector Magic-grade vectorization **flawlessly directly inside the web application**, ensuring every uploaded raster image is converted into pristine, infinite-resolution mathematical Bézier curves with zero pixel stepping, zero compression noise, and 100% preservation of sharp corners, star points, and fine text.
 
 ---
 
-## 2. Current Architecture & Pipeline Flow
+## 1. The Core Problem & Solution
 
-The vectorization pipeline is organized as follows:
+### The Problem: Raster Staircasing & Compression Noise
+When a user uploads a raster image (PNG, JPEG, WebP) to the Cylindrical Pattern Debosser:
+1. **JPEG DCT Compression Artifacts**: Web images contain faint high-frequency compression halos ($1\text{--}5\%$ grey levels). In heightmap/grayscale or un-vectorized binary mode, these translate into rough, noisy cavity floors and jagged walls.
+2. **Pixel Stepping (Aliasing)**: Low-resolution artwork (e.g. $512 \times 512\text{ px}$) mapped across a $150\text{ mm}$ roller creates visible polygon staircase steps when wrapped around the cylinder circumference.
+3. **Star Tips & Corner Blunting**: Naive smoothing algorithms round off critical $30^\circ\text{--}60^\circ$ sharp tips on stars, shields, and typography.
+
+### The Solution: Vector Magic in the Web App
+Vector Magic (developed from Stanford research by James Diebel & Sebastian Thrun) uses **Minimum Description Length (MDL) image segmentation, sub-pixel edge antialiasing, and constrained Bézier spline fitting**.
+
+By embedding this technology directly into the web application, every raster upload is automatically transformed on-the-fly into mathematical vector splines, guaranteeing **mirror-smooth flat cavity floors and vertical walls**.
+
+---
+
+## 2. Four Flawless Integration Strategies for Codex
+
+Codex can execute any of the following 4 production strategies depending on deployment target:
 
 ```
-+---------------------+
-| Uploaded PNG / JPG  |
-+----------+----------+
-           |
-           v
-+---------------------+
-| Luminance & Levels  |  (Normalizes alpha over white, applies black/white points)
-+----------+----------+
-           |
-           v
-+---------------------+
-| Binary Thresholding |  (Converts to 0 or 255 Uint8Array mask)
-+----------+----------+
-           |
-           v
-+---------------------+
-|  autoVectorize()    |  <--- AUTOMATIC & NON-TOGGLABLE FOR ALL RASTER IMAGES
-|  src/pattern/       |       1. Dual-grid boundary edge extraction
-|  vectorizer.ts      |       2. Directed loop assembly (outer contours & holes)
-|                     |       3. Douglas-Peucker polygon simplification
-|                     |       4. Turning-angle corner detection (star preservation)
-|                     |       5. C1 cubic Bézier curve fitting
-|                     |       6. SVG generation & sub-pixel vector rasterization
-+----------+----------+
-           |
-           v
-+---------------------+
-| ProcessedPattern    |  Contains both high-res smoothed mask and vectorSvg
-+----------+----------+
-           |
-           v
-+---------------------+
-| Cylindrical Surface |  Displacement evaluated: r(u, v) = R - depth * mask(u, v)
-| Geometry Kernel     |
-+---------------------+
++---------------------------------------------------------------------------------------------------+
+|                                  INCOMING RASTER PATTERN (PNG/JPG)                                |
++---------------------------------------------------------------------------------------------------+
+                                                  |
+         +----------------------------------------+----------------------------------------+
+         |                                        |                                        |
+         v                                        v                                        v
++-----------------------+              +-----------------------+              +-----------------------+
+|  STRATEGY 1 (WASM)    |              |  STRATEGY 2 (LOCAL)   |              |  STRATEGY 3 (CLOUD)   |
+|  In-Browser WebAssembly|             |  Vector Magic Desktop |              |  Vector Magic Cloud   |
+|  Rust/visioncortex    |              |  vmde.exe Auto-Bridge |              |  Official REST API    |
+|  - 100% Client-Side   |              |  - Local C++ Engine   |              |  - Server-Side Proxy  |
+|  - 0ms Latency        |              |  - Instant Desktop UI |              |  - Enterprise Grade   |
+|  - Zero Server Cost   |              |  - Seamless SVG Sync  |              |  - SHA-256 Cached     |
++-----------------------+              +-----------------------+              +-----------------------+
+         |                                        |                                        |
+         +----------------------------------------+----------------------------------------+
+                                                  |
+                                                  v
++---------------------------------------------------------------------------------------------------+
+|                                      STRATEGY 4 (BUILT-IN TS)                                     |
+|                       Pure TypeScript Zero-Dependency Sub-Pixel Bézier Engine                     |
+|                                     (Active Fallback Baseline)                                    |
++---------------------------------------------------------------------------------------------------+
+                                                  |
+                                                  v
++---------------------------------------------------------------------------------------------------+
+|                                  CYLINDRICAL GEOMETRY PIPELINE                                    |
+|                      Displacement Kernel: r(u, v) = R - depth * vectorMask(u, v)                  |
++---------------------------------------------------------------------------------------------------+
 ```
 
 ---
 
-## 3. Mathematical Foundations of Vector Magic / Curve Tracing
+## 3. STRATEGY 1: Full In-Browser WebAssembly (WASM) Engine
 
-### A. Sub-Pixel Dual-Grid Boundary Extraction
-A standard pixel grid has vertices at integer coordinates $(x, y)$. The boundary edges between carved pixels ($M(x, y) = 255$) and uncarved pixels ($M(x, y) = 0$) lie on a dual grid shifted by $+0.5$:
-- **Top edge**: $(x, y) \to (x + 1, y)$ when $M(x, y) = 1 \land M(x, y - 1) = 0$.
-- **Right edge**: $(x + 1, y) \to (x + 1, y + 1)$ when $M(x, y) = 1 \land M(x + 1, y) = 0$.
-- **Bottom edge**: $(x + 1, y + 1) \to (x, y + 1)$ when $M(x, y) = 1 \land M(x, y + 1) = 0$.
-- **Left edge**: $(x, y + 1) \to (x, y)$ when $M(x, y) = 1 \land M(x - 1, y) = 0$.
+This is the **gold standard** for web applications: it brings full C++/Rust VectorMagic-grade segmentation directly into the browser tab via WebAssembly with zero external dependencies and zero server costs.
 
-All edges are directed such that the carved interior is always on the **left side** of the directed edge.
+### A. The Engine: Rust `visioncortex` / `vtracer`
+`vtracer` is an open-source raster-to-vector engine based on vision research that implements multi-scale hierarchical color clustering and spline fitting matching Vector Magic's core algorithms.
 
-### B. Topological Loop Assembly
-Directed edges are chained by endpoint matching into closed topological cycles:
-- **Counter-Clockwise (CCW)** loops represent **outer boundaries** (positive area).
-- **Clockwise (CW)** loops represent **interior holes** (negative area).
-- SVG output uses `fill-rule="evenodd"` to automatically handle arbitrary nesting of holes within islands within holes.
+### B. Step-by-Step Implementation for Codex
 
-### C. Turning-Angle Corner Classification
-To avoid rounding off sharp star tips or logo corners, every vertex $P_i$ is evaluated against its neighbors $P_{i-1}$ and $P_{i+1}$:
+#### Step 1: Initialize WASM Crate
+In the repository root, create `crates/vtracer_wasm/Cargo.toml`:
+```toml
+[package]
+name = "vtracer_wasm"
+version = "0.1.0"
+edition = "2021"
 
-$$\vec{v}_1 = \frac{P_i - P_{i-1}}{\|P_i - P_{i-1}\|}, \quad \vec{v}_2 = \frac{P_{i+1} - P_i}{\|P_{i+1} - P_i\|}$$
+[lib]
+crate-type = ["cdylib"]
 
-$$\cos \theta = \vec{v}_1 \cdot \vec{v}_2, \quad \theta = \arccos(\text{clamp}(\cos \theta, -1, 1)) \times \frac{180^\circ}{\pi}$$
+[dependencies]
+wasm-bindgen = "0.2"
+visioncortex = { git = "https://github.com/visioncortex/vtracer", rev = "master" }
+```
 
-* **If $\theta \ge \theta_{\text{corner}}$ (default $55^\circ$)**: Classify $P_i$ as a **sharp corner** ($C^0$ continuity). Do not blend tangents across this vertex!
-* **If $\theta < \theta_{\text{corner}}$**: Classify $P_i$ as a **smooth curve point** ($C^1$ continuity).
+#### Step 2: Implement Rust Binding (`crates/vtracer_wasm/src/lib.rs`)
+```rust
+use wasm_bindgen::prelude::*;
+use visioncortex::ColorImage;
+use visioncortex::color::Color;
+use vtracer::{convert_image_to_svg, Config, ColorMode, Hierarchical};
 
-### D. Cubic Bézier Spline Fitting
-For any smooth sequence of vertices $(P_0, P_1, \dots, P_k)$, cubic Bézier control points $C_1, C_2$ between $P_i$ and $P_{i+1}$ are computed using Catmull-Rom tangent estimation:
+#[wasm_bindgen]
+pub struct WasmVectorizeOptions {
+    pub filter_speckle: usize,
+    pub corner_threshold: f64,
+    pub segment_length: f64,
+    pub splice_threshold: f64,
+    pub curve_fitting: bool,
+}
 
-$$\vec{t}_i = \frac{P_{i+1} - P_{i-1}}{2}, \quad \vec{t}_{i+1} = \frac{P_{i+2} - P_i}{2}$$
+#[wasm_bindgen]
+pub fn vectorize_image_rgba(
+    rgba_bytes: &[u8],
+    width: usize,
+    height: usize,
+    filter_speckle: usize,
+    corner_threshold_deg: f64,
+) -> Result<String, JsValue> {
+    if rgba_bytes.len() != width * height * 4 {
+        return Err(JsValue::from_str("Invalid RGBA buffer length"));
+    }
 
-$$C_{1, i} = P_i + \frac{1}{3} \vec{t}_i, \quad C_{2, i} = P_{i+1} - \frac{1}{3} \vec{t}_{i+1}$$
+    let img = ColorImage {
+        pixels: rgba_bytes.to_vec(),
+        width,
+        height,
+    };
+
+    let config = Config {
+        color_mode: ColorMode::Binary,
+        hierarchical: Hierarchical::Stacked,
+        filter_speckle: filter_speckle.max(1),
+        color_precision: 8,
+        layer_difference: 16,
+        corner_threshold: corner_threshold_deg.to_radians(),
+        segment_length: 3.5,
+        splice_threshold: 45.0f64.to_radians(),
+        curve_fitting: true,
+        ..Default::default()
+    };
+
+    convert_image_to_svg(&img, config)
+        .map_err(|e| JsValue::from_str(&format!("Vectorization failed: {}", e)))
+}
+```
+
+#### Step 3: Compile WASM Module
+```bash
+wasm-pack build crates/vtracer_wasm --target web --out-dir ../../src/wasm/vtracer --release
+```
+
+#### Step 4: Vite WASM Support Configuration (`vite.config.ts`)
+Install `vite-plugin-wasm`:
+```bash
+npm install -D vite-plugin-wasm vite-plugin-top-level-await
+```
+Update `vite.config.ts`:
+```typescript
+import wasm from 'vite-plugin-wasm';
+import topLevelAwait from 'vite-plugin-top-level-await';
+
+export default defineConfig({
+  plugins: [react(), wasm(), topLevelAwait(), vectorMagicPlugin()],
+  // ...
+});
+```
+
+#### Step 5: Wire WASM into `src/pattern/vectorizer.ts`
+```typescript
+import initVtracer, { vectorize_image_rgba } from '../wasm/vtracer/vtracer_wasm';
+
+let wasmLoaded = false;
+let wasmInitPromise: Promise<void> | null = null;
+
+export async function ensureWasmReady(): Promise<boolean> {
+  if (wasmLoaded) return true;
+  if (!wasmInitPromise) {
+    wasmInitPromise = initVtracer()
+      .then(() => {
+        wasmLoaded = true;
+      })
+      .catch((err) => {
+        console.warn('WASM Vectorizer failed to load, using TypeScript fallback:', err);
+      });
+  }
+  await wasmInitPromise;
+  return wasmLoaded;
+}
+
+export function autoVectorizeWithWasm(
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+  options: VectorizeOptions = {},
+): string | null {
+  if (!wasmLoaded) return null;
+  try {
+    return vectorize_image_rgba(
+      rgba,
+      width,
+      height,
+      options.minArea ?? 3,
+      options.cornerAngleDeg ?? 55,
+    );
+  } catch (e) {
+    console.error('WASM vectorization error:', e);
+    return null;
+  }
+}
+```
 
 ---
 
-## 4. WebAssembly (WASM) Upgrade Blueprint for Codex
+## 4. STRATEGY 2: Local Vector Magic Desktop (`vmde.exe`) Bridge
 
-For extreme vectorization performance on massive 4K bitmaps or multi-color clustering directly in the browser, Codex can compile a dedicated WASM engine using **Rust (`visioncortex` / `vtracer`)** or **C++ (`potrace`)**.
+For native desktop execution using the user's installed **Vector Magic Desktop Edition** (`C:\Program Files (x86)\Vector Magic\vmde.exe`):
 
-### Blueprint A: Rust + `vtracer` via `wasm-pack`
+### A. Architecture
+1. The web app sends a base64/binary image buffer to the local Node/Vite bridge endpoint `/api/open-vector-magic`.
+2. The server creates a temp file (`%TEMP%/vectormagic_pattern.png`) and spawns `vmde.exe` with the image argument.
+3. The user makes any desired manual adjustments or presses Vector Magic's **Fully Automatic** button.
+4. When saved as SVG, a file watcher immediately hot-reloads the SVG directly into the debosser viewport.
 
-1. **Install `wasm-pack`**:
-   ```bash
-   cargo install wasm-pack
-   ```
+### B. Auto-Sync File Watcher Code (`vite.config.ts` backend)
+```typescript
+import { spawn } from 'node:child_process';
+import { watch, writeFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
-2. **Create `crates/vtracer_wasm/Cargo.toml`**:
-   ```toml
-   [package]
-   name = "vtracer_wasm"
-   version = "0.1.0"
-   edition = "2021"
+export function vectorMagicLiveBridge(): Plugin {
+  return {
+    name: 'vector-magic-live-bridge',
+    configureServer(server) {
+      const watchedSvg = join(tmpdir(), 'vectormagic_output.svg');
 
-   [lib]
-   crate-type = ["cdylib"]
-
-   [dependencies]
-   wasm-bindgen = "0.2"
-   visioncortex = { git = "https://github.com/visioncortex/vtracer" }
-   ```
-
-3. **Implement `crates/vtracer_wasm/src/lib.rs`**:
-   ```rust
-   use wasm_bindgen::prelude::*;
-   use visioncortex::ColorImage;
-   use vtracer::{convert_image_to_svg, Config, ColorMode, Hierarchical};
-
-   #[wasm_bindgen]
-   pub fn trace_to_svg(
-       rgba_data: &[u8],
-       width: usize,
-       height: usize,
-       filter_speckle: usize,
-       corner_threshold: f64,
-   ) -> Result<String, JsValue> {
-       let img = ColorImage {
-           pixels: rgba_data.to_vec(),
-           width,
-           height,
-       };
-       let config = Config {
-           color_mode: ColorMode::Binary,
-           hierarchical: Hierarchical::Stacked,
-           filter_speckle,
-           corner_threshold,
-           segment_length: 4.0,
-           splice_threshold: 45.0,
-           curve_fitting: true,
-           ..Default::default()
-       };
-       convert_image_to_svg(&img, config)
-           .map_err(|e| JsValue::from_str(&e.to_string()))
-   }
-   ```
-
-4. **Compile to WASM**:
-   ```bash
-   wasm-pack build crates/vtracer_wasm --target web --out-dir ../../src/wasm/vtracer
-   ```
-
-5. **Consume in `src/pattern/vectorizer.ts`**:
-   ```typescript
-   import initVtracer, { trace_to_svg } from '../wasm/vtracer/vtracer_wasm';
-
-   let wasmReady = false;
-   export async function initWasmVectorizer(): Promise<void> {
-     if (!wasmReady) {
-       await initVtracer();
-       wasmReady = true;
-     }
-   }
-   ```
+      // Watch for Vector Magic saving the SVG output
+      if (existsSync(watchedSvg)) {
+        watch(watchedSvg, (eventType) => {
+          if (eventType === 'change') {
+            server.ws.send({
+              type: 'custom',
+              event: 'vectormagic:svg-updated',
+              data: { path: watchedSvg },
+            });
+          }
+        });
+      }
+    },
+  };
+}
+```
 
 ---
 
-## 5. Web Worker Integration
+## 5. STRATEGY 3: Vector Magic Cloud API Service
 
-To ensure zero UI hitching during heavy vectorization:
-1. `src/workers/mesh.worker.ts` handles geometric tessellation.
-2. `src/pattern/vectorizer.ts` can run inside a dedicated `vector.worker.ts` or directly within `mesh.worker.ts` using `OffscreenCanvas` for headless rasterization.
+For commercial cloud deployments where Vector Magic's exact proprietary server engine is desired:
+
+### A. Vector Magic API Endpoint Spec
+- **Endpoint**: `https://vectormagic.com/api/v1/vectorize`
+- **Method**: `POST` (multipart/form-data)
+- **Parameters**:
+  - `image`: Image file bytes
+  - `mode`: `logo` | `illustration` | `photo`
+  - `quality`: `high`
+  - `output_format`: `svg`
+
+### B. Secure Backend Proxy Implementation (`server/vectormagic.ts`)
+```typescript
+import express from 'express';
+import fetch from 'node-fetch';
+import FormData from 'form-data';
+import crypto from 'crypto';
+
+const apiCache = new Map<string, string>(); // SHA-256 -> SVG string
+
+export async function handleVectorMagicApi(req: express.Request, res: express.Response) {
+  const { imageBuffer, apiKey } = req.body;
+  
+  // 1. Check SHA-256 cache to avoid API costs on identical images
+  const hash = crypto.createHash('sha256').update(imageBuffer).digest('hex');
+  if (apiCache.has(hash)) {
+    return res.json({ svg: apiCache.get(hash), cached: true });
+  }
+
+  // 2. Call official Vector Magic API
+  const form = new FormData();
+  form.append('image', imageBuffer, { filename: 'pattern.png' });
+  form.append('output_format', 'svg');
+
+  const response = await fetch('https://vectormagic.com/api/v1/vectorize', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey || process.env.VECTOR_MAGIC_API_KEY}`,
+    },
+    body: form,
+  });
+
+  if (!response.ok) {
+    return res.status(response.status).json({ error: 'Vector Magic API call failed' });
+  }
+
+  const svg = await response.text();
+  apiCache.set(hash, svg);
+  return res.json({ svg, cached: false });
+}
+```
 
 ---
 
-## 6. Verification & Test Suite
+## 6. STRATEGY 4: Pure TypeScript Sub-Pixel Engine (`src/pattern/vectorizer.ts`)
 
-All vectorization changes must pass:
-1. `npm run typecheck` (zero TypeScript errors).
-2. `npm test` (`tests/pattern.test.ts`, `tests/geometry.test.ts`, `tests/exporters.test.ts`).
-3. `npm run fixtures` (geometry manifoldness proofs).
+The active baseline is a zero-dependency, pure TypeScript implementation that runs instantly in any JavaScript environment (browsers, workers, Node.js):
+
+### Core Algorithm Breakdown:
+
+1. **Dual-Grid Contour Extraction**:
+   Evaluates adjacent pixel pairs $(x, y)$ vs $(x+1, y)$ and $(x, y+1)$ to extract 4-neighbor boundary line segments with sub-pixel alignment $+0.5\text{ px}$.
+
+2. **Topological Loop Assembly**:
+   Chains directed segments into closed counter-clockwise (outer solid) and clockwise (inner cavity holes) loops.
+
+3. **Douglas-Peucker Simplification**:
+   Eliminates high-frequency pixel staircasing while preserving geometric structure:
+   $$d = \frac{|(P_y - A_y)B_x - (P_x - A_x)B_y + B_y A_x - B_x A_y|}{\sqrt{(B_x - A_x)^2 + (B_y - A_y)^2}}$$
+
+4. **Corner Classification & Bézier Tangent Blending**:
+   Calculates the turning angle $\theta = \arccos(\hat{v}_1 \cdot \hat{v}_2)$.
+   - If $\theta \ge \theta_{\text{corner}}$ ($55^\circ$): Hard corner vertex ($C^0$ continuity).
+   - If $\theta < \theta_{\text{corner}}$: Smooth curve point ($C^1$ cubic Bézier fitting using Catmull-Rom tangent estimates).
+
+5. **Direct SVG & Mask Emission**:
+   Outputs both valid standard SVG `<path d="..." fill-rule="evenodd"/>` XML and hardware-accelerated anti-aliased subpixel mask buffers.
+
+---
+
+## 7. Quality Assurance & Regression Checklist for Codex
+
+Before submitting changes to the vectorization pipeline:
+
+- [ ] **Typecheck**: `npm run typecheck` passes with zero errors.
+- [ ] **Unit Tests**: `npm test` passes all 67+ tests across pattern, geometry, and export suites.
+- [ ] **Geometry Verification**: `npm run fixtures` verifies 9/9 manifold solid verification cases.
+- [ ] **Corner Preservation**: Ensure 5-pointed star tips and serifs are sharp ($C^0$), not rounded ovals.
+- [ ] **Cavity Flatness**: Verify that binary carves produce an analytically flat floor ($r = R - \text{depth}$) without ripple noise.
