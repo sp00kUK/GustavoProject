@@ -219,10 +219,19 @@ export function Viewport({ onReady, onFps, onError }: ViewportProps) {
     if (!preview) {
       state.solid.geometry = new THREE.BufferGeometry();
       state.wire.geometry = new THREE.BufferGeometry();
+      state.solid.position.y = 0;
+      state.wire.position.y = 0;
     } else {
       const geometry = toBufferGeometry(preview.mesh);
       addReliefColours(geometry, preview.stats);
       state.solid.geometry = geometry;
+
+      // Position the model so its lowest point sits on the floor grid (Y = 0)
+      const minY = geometry.boundingBox?.min.y ?? -50;
+      const yOffset = -minY;
+      state.solid.position.y = yOffset;
+      state.wire.position.y = yOffset;
+
       // A full wireframe of a million-triangle heightmap is unreadable and
       // costs more to build than the mesh itself.
       state.wire.geometry =
@@ -313,14 +322,16 @@ function modelRadius(state: SceneState): number {
 function fitCamera(state: SceneState, keepDirection = false): void {
   const radius = modelRadius(state);
   const distance = radius / Math.sin((state.camera.fov * Math.PI) / 360) / 1.35;
+  const centerY = state.solid.position.y;
 
-  state.controls.target.set(0, 0, 0);
+  state.controls.target.set(0, centerY, 0);
   if (keepDirection) {
-    const direction = state.camera.position.clone().normalize();
+    const direction = state.camera.position.clone().sub(state.controls.target).normalize();
     if (direction.lengthSq() < 1e-6) direction.set(0.6, 0.45, 0.8).normalize();
-    state.camera.position.copy(direction.multiplyScalar(distance));
+    state.camera.position.copy(direction.multiplyScalar(distance).add(state.controls.target));
   } else {
-    state.camera.position.set(0.62, 0.48, 0.82).normalize().multiplyScalar(distance);
+    const dir = new THREE.Vector3(0.62, 0.48, 0.82).normalize().multiplyScalar(distance);
+    state.camera.position.set(dir.x, centerY + dir.y, dir.z);
   }
   state.camera.near = Math.max(0.1, distance / 500);
   state.camera.far = distance * 20;
@@ -331,6 +342,7 @@ function fitCamera(state: SceneState, keepDirection = false): void {
 function setCameraView(state: SceneState, view: CameraView): void {
   const radius = modelRadius(state);
   const distance = radius / Math.sin((state.camera.fov * Math.PI) / 360) / 1.35;
+  const centerY = state.solid.position.y;
   const directions: Record<CameraView, [number, number, number]> = {
     front: [0, 0, 1],
     back: [0, 0, -1],
@@ -341,8 +353,9 @@ function setCameraView(state: SceneState, view: CameraView): void {
     iso: [0.62, 0.48, 0.82],
   };
   const [x, y, z] = directions[view];
-  state.controls.target.set(0, 0, 0);
-  state.camera.position.set(x, y, z).normalize().multiplyScalar(distance);
+  state.controls.target.set(0, centerY, 0);
+  const offset = new THREE.Vector3(x, y, z).normalize().multiplyScalar(distance);
+  state.camera.position.set(offset.x, centerY + offset.y, offset.z);
   state.camera.updateProjectionMatrix();
   state.controls.update();
 }
