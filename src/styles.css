@@ -228,6 +228,29 @@ select {
   flex: 1;
 }
 
+.author-credit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.author-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 120ms ease;
+}
+
+.author-link:hover {
+  text-decoration: underline;
+  color: #78d8ff;
+}
+
+.divider-dot {
+  color: var(--text-faint);
+  opacity: 0.6;
+}
+
 .version {
   font-family: var(--mono);
   color: var(--text-faint);

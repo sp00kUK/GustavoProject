@@ -319,6 +319,18 @@ function Workspace() {
           {cylinder.height} · {t('summary.reliefDepth')} {depth} {t('units.mm')}
         </span>
         <span className="spacer" />
+        <span className="muted small author-credit">
+          Developed by{' '}
+          <a
+            href="https://github.com/sp00kUK"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="author-link"
+          >
+            sp00k
+          </a>
+        </span>
+        <span className="divider-dot" aria-hidden="true">·</span>
         <span className="muted small">{t('app.privacy')}</span>
         <span className="muted small version">v{APP_VERSION}</span>
       </footer>
