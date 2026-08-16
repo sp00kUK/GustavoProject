@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-ssr
+out
+.vite
+*.local
+.DS_Store
+Thumbs.db
+.idea
+.vscode/*
+!.vscode/extensions.json
+coverage
+fixtures-out
+*.tsbuildinfo
