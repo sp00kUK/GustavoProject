@@ -74,6 +74,49 @@ export function PatternSection() {
     pattern !== null && Math.min(pattern.width, pattern.height) < 128;
   const seamWarning = seams !== null && Math.max(seams.horizontal, seams.vertical) > 0.25;
 
+  const [vmLoading, setVmLoading] = useState(false);
+  const [vmStatus, setVmStatus] = useState<string | null>(null);
+
+  const openInVectorMagic = useCallback(async () => {
+    if (!pattern) return;
+    setVmLoading(true);
+    setVmStatus(null);
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = pattern.width;
+      canvas.height = pattern.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const imgData = ctx.createImageData(pattern.width, pattern.height);
+      for (let i = 0; i < pattern.width * pattern.height; i++) {
+        const val = pattern.luminance[i];
+        imgData.data[i * 4] = val;
+        imgData.data[i * 4 + 1] = val;
+        imgData.data[i * 4 + 2] = val;
+        imgData.data[i * 4 + 3] = pattern.alpha ? pattern.alpha[i] : 255;
+      }
+      ctx.putImageData(imgData, 0, 0);
+      const dataUrl = canvas.toDataURL('image/png');
+
+      const res = await fetch('/api/open-vector-magic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setVmStatus('Vector Magic opened!');
+        setTimeout(() => setVmStatus(null), 4000);
+      } else {
+        setVmStatus(data.error || 'Could not launch Vector Magic');
+      }
+    } catch (err: any) {
+      setVmStatus(err.message || 'Error launching Vector Magic');
+    } finally {
+      setVmLoading(false);
+    }
+  }, [pattern]);
+
   return (
     <Section title={t('section.pattern')}>
       <div
@@ -123,14 +166,27 @@ export function PatternSection() {
               {t('pattern.source')}: {pattern.originalWidth} × {pattern.originalHeight}{' '}
               {t('units.px')}
             </span>
-            <button
-              type="button"
-              className="link"
-              onClick={() => setPatternSource(null)}
-            >
-              {t('action.removePattern')}
-            </button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                type="button"
+                className="link"
+                style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--accent, #63d0ff)' }}
+                onClick={openInVectorMagic}
+                disabled={vmLoading}
+                title="Launch Vector Magic Desktop (C:\Program Files (x86)\Vector Magic\vmde.exe)"
+              >
+                {vmLoading ? '...' : `✨ ${t('action.openVectorMagic')}`}
+              </button>
+              <button
+                type="button"
+                className="link"
+                onClick={() => setPatternSource(null)}
+              >
+                {t('action.removePattern')}
+              </button>
+            </div>
           </div>
+          {vmStatus && <p className="notice" style={{ margin: '4px 0 8px 0' }}>{vmStatus}</p>}
 
           <Segmented<PreviewMode>
             value={previewMode}

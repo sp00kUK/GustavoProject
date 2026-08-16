@@ -27,6 +27,7 @@ export const es: Dictionary = {
   'action.redo': 'Rehacer',
   'action.loadExample': 'Cargar ejemplo',
   'action.removePattern': 'Quitar',
+  'action.openVectorMagic': 'Abrir en Vector Magic Desktop',
   'action.copyDebug': 'Copiar info de depuración',
   'action.copied': 'Copiado',
   'action.setMaxDepth': 'Usar la profundidad máxima segura',

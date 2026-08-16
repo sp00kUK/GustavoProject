@@ -27,6 +27,7 @@ export const en = {
   'action.redo': 'Redo',
   'action.loadExample': 'Load Example',
   'action.removePattern': 'Remove',
+  'action.openVectorMagic': 'Open in Vector Magic Desktop',
   'action.copyDebug': 'Copy Debug Info',
   'action.copied': 'Copied',
   'action.setMaxDepth': 'Set Maximum Safe Depth',
