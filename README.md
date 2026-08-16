@@ -2,7 +2,7 @@
 
 Convierte arte 2D en relieves cilíndricos negativos imprimibles en 3D — rodillos de textura para escenografía y wargames, rodillos de arcilla y cerámica, sellos, empuñaduras y moldes cilíndricos.
 
-Todo se ejecuta directamente en el navegador. Sin cuentas, sin backend y sin subir archivos a servidores externos: tu diseño artístico y tus modelos 3D nunca salen de tu máquina.
+La generación geométrica se ejecuta directamente en el navegador. La integración opcional con Vector Magic usa una copia local licenciada de la aplicación Desktop en el mismo equipo; no sube el diseño a servidores externos.
 
 ---
 
@@ -104,11 +104,20 @@ Para evitar discontinuidades donde el grabado llega a los extremos superior o in
 ### Orificio Central / Eje (`bore.ts`)
 Geometría cilíndrica interior real (no una sustracción booleana). Las normales apuntan hacia el eje central ("hacia afuera del material"), garantizando compatibilidad total con laminadores 3D.
 
-### Auto-Vectorizador Automático (`vectorizer.ts`)
-Convierte automáticamente cualquier imagen de mapa de bits (PNG, JPG, WebP) en curvas matemáticas Bézier continuas ($C^1$) preservando esquinas vivas (puntas de estrellas, escudos, letras):
-- **100% Automático**: Activo por defecto para todas las imágenes en modo binario (sin necesidad de activarlo manualmente).
-- **Control de Curvas**: Parámetros de suavizado de curvas y ángulo de esquinas vivas disponibles directamente en la interfaz.
-- **Documentación Técnica para Codex/WASM**: Consulta [docs/VECTORIZER_HANDOFF.md](docs/VECTORIZER_HANDOFF.md) para la especificación matemática completa y la guía de compilación de módulos WebAssembly (Rust/C++).
+### Vectorización con Vector Magic Desktop real
+
+El proyecto no incluye ni presenta un trazador casero como si fuera Vector Magic. El botón **Vectorizar automáticamente con Vector Magic** realiza un flujo local con el producto original:
+
+1. Conserva y entrega los bytes originales del PNG/JPG a `vmde.exe`.
+2. Ejecuta la instalación licenciada de Vector Magic Desktop oculta y selecciona **Fully Automatic**.
+3. Completa automáticamente la revisión, selecciona explícitamente el exportador SVG y guarda el resultado en una carpeta temporal aislada.
+4. Muestra únicamente una barra de progreso en la interfaz e importa automáticamente ese SVG real como la nueva fuente del patrón.
+
+La búsqueda se realiza en este orden: `VECTOR_MAGIC_EXE`, `vendor/vector-magic/vmde.exe`, `C:\Program Files (x86)\Vector Magic\vmde.exe` y `C:\Program Files\Vector Magic\vmde.exe`. Vector Magic debe estar cerrado antes de comenzar porque Desktop usa una sola instancia.
+
+`vendor/vector-magic/` sirve como copia local junto al repositorio, pero está ignorada por Git y no se incluye en `dist/`. La licencia incluida de Vector Magic no concede derechos de redistribución del programa; no fuerces esos binarios al historial remoto sin autorización expresa del titular.
+
+Consulta [docs/VECTORIZER_HANDOFF.md](docs/VECTORIZER_HANDOFF.md) para el contrato exacto del puente local y sus limitaciones.
 
 ---
 
@@ -182,6 +191,8 @@ src/
   viewport/       Visor 3D interactivo con Three.js
   components/     Paneles de control, configuración, información y diálogos
   i18n/           Diccionarios en Español e Inglés
+server/
+  vectorMagicBridge.ts  Puente local restringido a loopback para la aplicación Desktop real
 ```
 
 ---

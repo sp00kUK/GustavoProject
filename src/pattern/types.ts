@@ -19,6 +19,13 @@ export interface RawPattern {
   /** Pixel dimensions before any downsampling, for the UI to report honestly. */
   originalWidth: number;
   originalHeight: number;
+  /**
+   * Original uploaded file bytes. Kept so Vector Magic Desktop receives the
+   * real source artwork instead of a grayscale reconstruction. Procedural
+   * patterns do not have an original file and leave these fields undefined.
+   */
+  sourceBytes?: Uint8Array;
+  sourceMimeType?: string;
 }
 
 /**
@@ -36,6 +43,4 @@ export interface ProcessedPattern {
   binary: boolean;
   /** Hash of the inputs that produced it, for cache invalidation. */
   signature: string;
-  /** Vectorized SVG string if auto-vectorization was run */
-  vectorSvg?: string;
 }

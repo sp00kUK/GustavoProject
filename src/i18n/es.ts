@@ -8,7 +8,7 @@ import type { Dictionary } from './en';
 export const es: Dictionary = {
   'app.title': 'Grabador de Patrones Cilíndricos',
   'app.subtitle': 'Generador paramétrico de patrones para rodillos imprimibles',
-  'app.privacy': 'Tu patrón y tu modelo se procesan localmente en tu navegador.',
+  'app.privacy': 'Tu patrón permanece en este equipo; el modelo se genera en el navegador.',
   'app.untitled': 'Rodillo sin título',
 
   'action.new': 'Nuevo',
@@ -27,7 +27,7 @@ export const es: Dictionary = {
   'action.redo': 'Rehacer',
   'action.loadExample': 'Cargar ejemplo',
   'action.removePattern': 'Quitar',
-  'action.openVectorMagic': 'Abrir en Vector Magic Desktop',
+  'action.openVectorMagic': 'Vectorizar automáticamente con Vector Magic',
   'action.copyDebug': 'Copiar info de depuración',
   'action.copied': 'Copiado',
   'action.setMaxDepth': 'Usar la profundidad máxima segura',
@@ -57,9 +57,6 @@ export const es: Dictionary = {
   'field.invert': 'Invertir patrón',
   'field.threshold': 'Umbral',
   'field.despeckle': 'Quitar motas',
-  'field.vectorize': 'Auto-vectorizar (Trazo vectorial tipo VectorMagic)',
-  'field.vectorizeSmoothness': 'Suavizado de curvas',
-  'field.vectorizeCornerThreshold': 'Ángulo de esquinas vivas',
   'field.brightness': 'Brillo',
   'field.contrast': 'Contraste',
   'field.gamma': 'Gamma',
@@ -126,12 +123,13 @@ export const es: Dictionary = {
   'pattern.source': 'Origen',
   'pattern.original': 'Original',
   'pattern.processed': 'Procesado',
-  'pattern.vectorized': 'Vectorizado (SVG)',
   'pattern.tilePreview': 'Vista previa del mosaico',
   'pattern.tileSize': 'Tamaño del mosaico',
   'pattern.examples': 'Patrones de ejemplo',
   'pattern.none': 'No hay ningún patrón cargado',
-  'pattern.svgResolution': 'Resolución de rasterizado del SVG',
+  'pattern.vectorMagicProgress': 'Vectorizando automáticamente con Vector Magic…',
+  'pattern.vectorMagicImported':
+    'El SVG exportado por Vector Magic es ahora el patrón activo.',
 
   'view.solid': 'Sólido',
   'view.wireframe': 'Malla',
@@ -208,6 +206,11 @@ export const es: Dictionary = {
     'No se ha podido generar la exportación con calidad {quality}.\n\nPrueba a:\n• bajar la calidad de exportación\n• reducir las repeticiones del patrón\n• usar una imagen de menor resolución',
   'error.decodeFailed': 'No se ha podido leer ese archivo como imagen.',
   'error.svgFailed': 'No se ha podido rasterizar ese SVG.',
+  'error.vectorMagicNotInstalled':
+    'No se ha encontrado Vector Magic Desktop. Añádelo en vendor/vector-magic, define VECTOR_MAGIC_EXE o instálalo en Program Files y reinicia el servidor local.',
+  'error.vectorMagicAlreadyRunning':
+    'Cierra la ventana existente de Vector Magic Desktop y vuelve a intentarlo.',
+  'error.vectorMagicBridge': 'La integración con Vector Magic Desktop ha fallado: {message}',
   'error.unsupportedFile':
     '{name} no es un formato admitido. Usa PNG, JPG, WEBP o SVG.',
   'error.webgl':
@@ -244,8 +247,8 @@ export const es: Dictionary = {
     'Cómo se coloca el rodillo en el archivo exportado. Las exportaciones usan Z hacia arriba, que es lo que esperan los laminadores.',
   'tooltip.tileFit':
     'Cómo se ajusta la imagen de origen dentro de un mosaico cuando sus proporciones son distintas a las del mosaico.',
-  'tooltip.vectorize':
-    'Convierte imágenes rasterizadas en curvas matemáticas Bézier continuas (tecnología tipo VectorMagic), manteniendo las puntas de estrellas y letras nítidas sin pixelación.',
+  'tooltip.vectorMagicDesktop':
+    'Ejecuta la aplicación local Vector Magic Desktop de forma invisible en modo totalmente automático, exporta el SVG e importa el resultado real.',
 
   'help.title': 'Primeros pasos',
   'help.step1': 'Define las dimensiones de tu rodillo.',

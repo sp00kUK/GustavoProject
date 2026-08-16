@@ -286,23 +286,3 @@ describe('physical sizing', () => {
     expect(spacing).toBeCloseTo(0.0244, 3);
   });
 });
-
-describe('auto-vectorizer (VectorMagic tracing)', () => {
-  it('traces clean vector contours and generates valid SVG', () => {
-    // 16x16 square with 8x8 carved center
-    const w = 16;
-    const mask = new Uint8Array(w * w);
-    for (let y = 4; y < 12; y++) {
-      for (let x = 4; x < 12; x++) {
-        mask[y * w + x] = 255;
-      }
-    }
-    const raw = grayPattern([...mask].map((v) => 255 - v), w, w);
-    const p = processPattern(raw, settings({ mode: 'binary', vectorize: true }));
-    expect(p.vectorSvg).toBeDefined();
-    expect(p.vectorSvg).toContain('<svg');
-    expect(p.vectorSvg).toContain('<path');
-    expect(p.vectorSvg).toContain('M ');
-    expect(p.vectorSvg).toContain('Z');
-  });
-});

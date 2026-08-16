@@ -1,338 +1,136 @@
-# Vector Magic In-Browser Integration & Architecture Master Handoff
+# Vector Magic Desktop Integration Handoff
 
-> **Target Audience**: Codex, Autonomous AI Agents, and Core Systems Engineers.  
-> **Mission**: Implement and run true Vector Magic-grade vectorization **flawlessly directly inside the web application**, ensuring every uploaded raster image is converted into pristine, infinite-resolution mathematical Bézier curves with zero pixel stepping, zero compression noise, and 100% preservation of sharp corners, star points, and fine text.
+## Decision
 
----
+This project uses the real Vector Magic Desktop application for raster-to-vector
+conversion. It does not bundle a substitute tracer and it does not describe
+third-party tracing code as "Vector Magic-grade".
 
-## 1. The Core Problem & Solution
+The verified local runtime is:
 
-### The Problem: Raster Staircasing & Compression Noise
-When a user uploads a raster image (PNG, JPEG, WebP) to the Cylindrical Pattern Debosser:
-1. **JPEG DCT Compression Artifacts**: Web images contain faint high-frequency compression halos ($1\text{--}5\%$ grey levels). In heightmap/grayscale or un-vectorized binary mode, these translate into rough, noisy cavity floors and jagged walls.
-2. **Pixel Stepping (Aliasing)**: Low-resolution artwork (e.g. $512 \times 512\text{ px}$) mapped across a $150\text{ mm}$ roller creates visible polygon staircase steps when wrapped around the cylinder circumference.
-3. **Star Tips & Corner Blunting**: Naive smoothing algorithms round off critical $30^\circ\text{--}60^\circ$ sharp tips on stars, shields, and typography.
-
-### The Solution: Vector Magic in the Web App
-Vector Magic (developed from Stanford research by James Diebel & Sebastian Thrun) uses **Minimum Description Length (MDL) image segmentation, sub-pixel edge antialiasing, and constrained Bézier spline fitting**.
-
-By embedding this technology directly into the web application, every raster upload is automatically transformed on-the-fly into mathematical vector splines, guaranteeing **mirror-smooth flat cavity floors and vertical walls**.
-
----
-
-## 2. Four Flawless Integration Strategies for Codex
-
-Codex can execute any of the following 4 production strategies depending on deployment target:
-
-```
-+---------------------------------------------------------------------------------------------------+
-|                                  INCOMING RASTER PATTERN (PNG/JPG)                                |
-+---------------------------------------------------------------------------------------------------+
-                                                  |
-         +----------------------------------------+----------------------------------------+
-         |                                        |                                        |
-         v                                        v                                        v
-+-----------------------+              +-----------------------+              +-----------------------+
-|  STRATEGY 1 (WASM)    |              |  STRATEGY 2 (LOCAL)   |              |  STRATEGY 3 (CLOUD)   |
-|  In-Browser WebAssembly|             |  Vector Magic Desktop |              |  Vector Magic Cloud   |
-|  Rust/visioncortex    |              |  vmde.exe Auto-Bridge |              |  Official REST API    |
-|  - 100% Client-Side   |              |  - Local C++ Engine   |              |  - Server-Side Proxy  |
-|  - 0ms Latency        |              |  - Instant Desktop UI |              |  - Enterprise Grade   |
-|  - Zero Server Cost   |              |  - Seamless SVG Sync  |              |  - SHA-256 Cached     |
-+-----------------------+              +-----------------------+              +-----------------------+
-         |                                        |                                        |
-         +----------------------------------------+----------------------------------------+
-                                                  |
-                                                  v
-+---------------------------------------------------------------------------------------------------+
-|                                      STRATEGY 4 (BUILT-IN TS)                                     |
-|                       Pure TypeScript Zero-Dependency Sub-Pixel Bézier Engine                     |
-|                                     (Active Fallback Baseline)                                    |
-+---------------------------------------------------------------------------------------------------+
-                                                  |
-                                                  v
-+---------------------------------------------------------------------------------------------------+
-|                                  CYLINDRICAL GEOMETRY PIPELINE                                    |
-|                      Displacement Kernel: r(u, v) = R - depth * vectorMask(u, v)                  |
-+---------------------------------------------------------------------------------------------------+
+```text
+F:\GustavoProject\vendor\vector-magic\vmde.exe
+Vector Magic Desktop Edition 1.15
+47 files / 24,988,890 bytes
 ```
 
----
+That local tree was SHA-256 compared with the Program Files installation with
+zero differences and passed a native SVG round-trip. `vendor/vector-magic/` is
+ignored by Git and is not emitted by the Vite build. The bundled Vector Magic
+EULA permits backup copies but does not grant redistribution rights, so the
+runtime must not be force-added or pushed without express authorization. The
+original Program Files installation was still present at the last verification.
 
-## 3. STRATEGY 1: Full In-Browser WebAssembly (WASM) Engine
+## Implemented flow
 
-This is the **gold standard** for web applications: it brings full C++/Rust VectorMagic-grade segmentation directly into the browser tab via WebAssembly with zero external dependencies and zero server costs.
-
-### A. The Engine: Rust `visioncortex` / `vtracer`
-`vtracer` is an open-source raster-to-vector engine based on vision research that implements multi-scale hierarchical color clustering and spline fitting matching Vector Magic's core algorithms.
-
-### B. Step-by-Step Implementation for Codex
-
-#### Step 1: Initialize WASM Crate
-In the repository root, create `crates/vtracer_wasm/Cargo.toml`:
-```toml
-[package]
-name = "vtracer_wasm"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-wasm-bindgen = "0.2"
-visioncortex = { git = "https://github.com/visioncortex/vtracer", rev = "master" }
+```text
+uploaded PNG/JPG bytes
+        |
+        v
+local Vite bridge  --->  real local vmde.exe
+                              |
+                      hidden Fully Automatic
+                      trace + SVG export
+                              |
+                              v
+local Vite bridge  <---  actual Vector Magic SVG
+        |
+        v
+browser validates and rasterises the SVG at the 2048 px mask limit
+        |
+        v
+cylindrical geometry pipeline
 ```
 
-#### Step 2: Implement Rust Binding (`crates/vtracer_wasm/src/lib.rs`)
-```rust
-use wasm_bindgen::prelude::*;
-use visioncortex::ColorImage;
-use visioncortex::color::Color;
-use vtracer::{convert_image_to_svg, Config, ColorMode, Hierarchical};
+1. `src/pattern/loaders.ts` retains the original compressed upload bytes.
+2. `src/pattern/vectorMagicDesktop.ts` sends native PNG/JPG files byte-for-byte
+   to the local bridge. WebP and procedural sources are converted to PNG first
+   because this Desktop release does not accept WebP.
+3. `server/vectorMagicBridge.ts` creates an isolated job directory and starts
+   `scripts/vectorMagicAutomation.ps1` with explicit input, output, status, and
+   cancellation paths.
+4. The helper launches the resolved `vmde.exe` hidden, targets the real Qt
+   wizard window, selects Fully Automatic, completes Review Result, and opens
+   Export Result. It then drives the native Windows Save dialog by control ID,
+   explicitly selects `Scalable Vector Graphics (*.svg)`, and saves the file.
+5. The helper writes monotonic phase/progress JSON. The browser polls the local
+   bridge and shows a loading bar; no native interaction or export path is
+   presented to the user.
+6. Once a complete SVG exists in the isolated directory, the app imports that
+   exact Vector Magic output as the active pattern and closes Desktop.
 
-#[wasm_bindgen]
-pub struct WasmVectorizeOptions {
-    pub filter_speckle: usize,
-    pub corner_threshold: f64,
-    pub segment_length: f64,
-    pub splice_threshold: f64,
-    pub curve_fitting: bool,
-}
+This is a desktop round-trip, not an in-browser port. A normal browser cannot
+load a native Win32 executable or its DLLs as WebAssembly.
 
-#[wasm_bindgen]
-pub fn vectorize_image_rgba(
-    rgba_bytes: &[u8],
-    width: usize,
-    height: usize,
-    filter_speckle: usize,
-    corner_threshold_deg: f64,
-) -> Result<String, JsValue> {
-    if rgba_bytes.len() != width * height * 4 {
-        return Err(JsValue::from_str("Invalid RGBA buffer length"));
-    }
+## Executable discovery
 
-    let img = ColorImage {
-        pixels: rgba_bytes.to_vec(),
-        width,
-        height,
-    };
+The bridge checks these locations in order:
 
-    let config = Config {
-        color_mode: ColorMode::Binary,
-        hierarchical: Hierarchical::Stacked,
-        filter_speckle: filter_speckle.max(1),
-        color_precision: 8,
-        layer_difference: 16,
-        corner_threshold: corner_threshold_deg.to_radians(),
-        segment_length: 3.5,
-        splice_threshold: 45.0f64.to_radians(),
-        curve_fitting: true,
-        ..Default::default()
-    };
+1. `VECTOR_MAGIC_EXE` environment variable
+2. `<repo>/vendor/vector-magic/vmde.exe`
+3. `C:\Program Files (x86)\Vector Magic\vmde.exe`
+4. `C:\Program Files\Vector Magic\vmde.exe`
 
-    convert_image_to_svg(&img, config)
-        .map_err(|e| JsValue::from_str(&format!("Vectorization failed: {}", e)))
-}
+Example for a custom installation in PowerShell:
+
+```powershell
+$env:VECTOR_MAGIC_EXE = 'D:\Apps\Vector Magic\vmde.exe'
+npm run dev
 ```
 
-#### Step 3: Compile WASM Module
+The repo-local runtime is a machine-local convenience, not a distributable
+project dependency. See `vendor/README.md` and the root `PUSH_HANDOFF.md`.
+
+## Product behavior and limitations
+
+- Vector Magic Desktop does not expose unattended SVG export as a documented
+  command-line contract. This integration automates its actual Windows UI; it
+  does not reimplement or substitute the tracing engine.
+- Desktop is single-instance. The helper refuses to control an already-running
+  Vector Magic window, so the user must close any independently opened instance
+  before starting a job.
+- Saving must be enabled by the user's Vector Magic licence. The trial can
+  preview results but may disable saving.
+- The local bridge exists in Vite's development and preview servers. A static
+  deployment cannot start native desktop programs and must let the user upload
+  a separately exported SVG instead.
+- Vector Magic SVG is still rasterised to a 2048 px binary mask before
+  mesh generation because the current cylindrical kernel consumes a sampled
+  `PatternSampler`. The contour creation itself is performed only by Vector
+  Magic.
+- SVG is treated as untrusted input: scripts and external references are
+  rejected before it is rendered as an image.
+
+## Security boundary
+
+- Only supported bitmap MIME types and matching file signatures are accepted.
+- Requests from non-loopback network clients are rejected; only the browser on
+  the same machine may start the desktop application or read a result.
+- Input and SVG result sizes are capped at 50 MiB.
+- Session identifiers are random UUIDs.
+- Results are read only from the server-created session directory; request
+  parameters can never select an arbitrary filesystem path.
+- The bridge never reads activation data or product keys. It starts the
+  resolved local executable and reads only the SVG written into its isolated
+  job directory.
+
+## Verification checklist
+
 ```bash
-wasm-pack build crates/vtracer_wasm --target web --out-dir ../../src/wasm/vtracer --release
+npm run typecheck
+npm test
+npm run fixtures
+npm run build
 ```
 
-#### Step 4: Vite WASM Support Configuration (`vite.config.ts`)
-Install `vite-plugin-wasm`:
-```bash
-npm install -D vite-plugin-wasm vite-plugin-top-level-await
-```
-Update `vite.config.ts`:
-```typescript
-import wasm from 'vite-plugin-wasm';
-import topLevelAwait from 'vite-plugin-top-level-await';
+Native automatic acceptance test:
 
-export default defineConfig({
-  plugins: [react(), wasm(), topLevelAwait(), vectorMagicPlugin()],
-  // ...
-});
-```
-
-#### Step 5: Wire WASM into `src/pattern/vectorizer.ts`
-```typescript
-import initVtracer, { vectorize_image_rgba } from '../wasm/vtracer/vtracer_wasm';
-
-let wasmLoaded = false;
-let wasmInitPromise: Promise<void> | null = null;
-
-export async function ensureWasmReady(): Promise<boolean> {
-  if (wasmLoaded) return true;
-  if (!wasmInitPromise) {
-    wasmInitPromise = initVtracer()
-      .then(() => {
-        wasmLoaded = true;
-      })
-      .catch((err) => {
-        console.warn('WASM Vectorizer failed to load, using TypeScript fallback:', err);
-      });
-  }
-  await wasmInitPromise;
-  return wasmLoaded;
-}
-
-export function autoVectorizeWithWasm(
-  rgba: Uint8Array,
-  width: number,
-  height: number,
-  options: VectorizeOptions = {},
-): string | null {
-  if (!wasmLoaded) return null;
-  try {
-    return vectorize_image_rgba(
-      rgba,
-      width,
-      height,
-      options.minArea ?? 3,
-      options.cornerAngleDeg ?? 55,
-    );
-  } catch (e) {
-    console.error('WASM vectorization error:', e);
-    return null;
-  }
-}
-```
-
----
-
-## 4. STRATEGY 2: Local Vector Magic Desktop (`vmde.exe`) Bridge
-
-For native desktop execution using the user's installed **Vector Magic Desktop Edition** (`C:\Program Files (x86)\Vector Magic\vmde.exe`):
-
-### A. Architecture
-1. The web app sends a base64/binary image buffer to the local Node/Vite bridge endpoint `/api/open-vector-magic`.
-2. The server creates a temp file (`%TEMP%/vectormagic_pattern.png`) and spawns `vmde.exe` with the image argument.
-3. The user makes any desired manual adjustments or presses Vector Magic's **Fully Automatic** button.
-4. When saved as SVG, a file watcher immediately hot-reloads the SVG directly into the debosser viewport.
-
-### B. Auto-Sync File Watcher Code (`vite.config.ts` backend)
-```typescript
-import { spawn } from 'node:child_process';
-import { watch, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-
-export function vectorMagicLiveBridge(): Plugin {
-  return {
-    name: 'vector-magic-live-bridge',
-    configureServer(server) {
-      const watchedSvg = join(tmpdir(), 'vectormagic_output.svg');
-
-      // Watch for Vector Magic saving the SVG output
-      if (existsSync(watchedSvg)) {
-        watch(watchedSvg, (eventType) => {
-          if (eventType === 'change') {
-            server.ws.send({
-              type: 'custom',
-              event: 'vectormagic:svg-updated',
-              data: { path: watchedSvg },
-            });
-          }
-        });
-      }
-    },
-  };
-}
-```
-
----
-
-## 5. STRATEGY 3: Vector Magic Cloud API Service
-
-For commercial cloud deployments where Vector Magic's exact proprietary server engine is desired:
-
-### A. Vector Magic API Endpoint Spec
-- **Endpoint**: `https://vectormagic.com/api/v1/vectorize`
-- **Method**: `POST` (multipart/form-data)
-- **Parameters**:
-  - `image`: Image file bytes
-  - `mode`: `logo` | `illustration` | `photo`
-  - `quality`: `high`
-  - `output_format`: `svg`
-
-### B. Secure Backend Proxy Implementation (`server/vectormagic.ts`)
-```typescript
-import express from 'express';
-import fetch from 'node-fetch';
-import FormData from 'form-data';
-import crypto from 'crypto';
-
-const apiCache = new Map<string, string>(); // SHA-256 -> SVG string
-
-export async function handleVectorMagicApi(req: express.Request, res: express.Response) {
-  const { imageBuffer, apiKey } = req.body;
-  
-  // 1. Check SHA-256 cache to avoid API costs on identical images
-  const hash = crypto.createHash('sha256').update(imageBuffer).digest('hex');
-  if (apiCache.has(hash)) {
-    return res.json({ svg: apiCache.get(hash), cached: true });
-  }
-
-  // 2. Call official Vector Magic API
-  const form = new FormData();
-  form.append('image', imageBuffer, { filename: 'pattern.png' });
-  form.append('output_format', 'svg');
-
-  const response = await fetch('https://vectormagic.com/api/v1/vectorize', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey || process.env.VECTOR_MAGIC_API_KEY}`,
-    },
-    body: form,
-  });
-
-  if (!response.ok) {
-    return res.status(response.status).json({ error: 'Vector Magic API call failed' });
-  }
-
-  const svg = await response.text();
-  apiCache.set(hash, svg);
-  return res.json({ svg, cached: false });
-}
-```
-
----
-
-## 6. STRATEGY 4: Pure TypeScript Sub-Pixel Engine (`src/pattern/vectorizer.ts`)
-
-The active baseline is a zero-dependency, pure TypeScript implementation that runs instantly in any JavaScript environment (browsers, workers, Node.js):
-
-### Core Algorithm Breakdown:
-
-1. **Dual-Grid Contour Extraction**:
-   Evaluates adjacent pixel pairs $(x, y)$ vs $(x+1, y)$ and $(x, y+1)$ to extract 4-neighbor boundary line segments with sub-pixel alignment $+0.5\text{ px}$.
-
-2. **Topological Loop Assembly**:
-   Chains directed segments into closed counter-clockwise (outer solid) and clockwise (inner cavity holes) loops.
-
-3. **Douglas-Peucker Simplification**:
-   Eliminates high-frequency pixel staircasing while preserving geometric structure:
-   $$d = \frac{|(P_y - A_y)B_x - (P_x - A_x)B_y + B_y A_x - B_x A_y|}{\sqrt{(B_x - A_x)^2 + (B_y - A_y)^2}}$$
-
-4. **Corner Classification & Bézier Tangent Blending**:
-   Calculates the turning angle $\theta = \arccos(\hat{v}_1 \cdot \hat{v}_2)$.
-   - If $\theta \ge \theta_{\text{corner}}$ ($55^\circ$): Hard corner vertex ($C^0$ continuity).
-   - If $\theta < \theta_{\text{corner}}$: Smooth curve point ($C^1$ cubic Bézier fitting using Catmull-Rom tangent estimates).
-
-5. **Direct SVG & Mask Emission**:
-   Outputs both valid standard SVG `<path d="..." fill-rule="evenodd"/>` XML and hardware-accelerated anti-aliased subpixel mask buffers.
-
----
-
-## 7. Quality Assurance & Regression Checklist for Codex
-
-Before submitting changes to the vectorization pipeline:
-
-- [ ] **Typecheck**: `npm run typecheck` passes with zero errors.
-- [ ] **Unit Tests**: `npm test` passes all 67+ tests across pattern, geometry, and export suites.
-- [ ] **Geometry Verification**: `npm run fixtures` verifies 9/9 manifold solid verification cases.
-- [ ] **Corner Preservation**: Ensure 5-pointed star tips and serifs are sharp ($C^0$), not rounded ovals.
-- [ ] **Cavity Flatness**: Verify that binary carves produce an analytically flat floor ($r = R - \text{depth}$) without ripple noise.
+1. Run `npm run dev`.
+2. Upload a PNG or JPG.
+3. Click **Auto-vectorize with Vector Magic**.
+4. Confirm that only the web loading bar is visible while the real Desktop
+   process runs in the background.
+5. Confirm that the source name changes to the SVG filename and that the SVG
+   notice appears.
+6. Confirm that `vmde.exe` exits after export.
+7. Generate and export a roller, then verify the mesh is manifold.

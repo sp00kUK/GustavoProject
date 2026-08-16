@@ -43,7 +43,7 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
       currentPattern = {
         id: p.id,
         name: p.name,
-        kind: 'raster',
+        kind: p.kind,
         width: p.width,
         height: p.height,
         luminance: new Uint8Array(p.luminance),

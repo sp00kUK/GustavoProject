@@ -4,12 +4,18 @@ import { useStore } from '../state/store';
 import { EXAMPLE_PATTERNS } from '../pattern/procedural';
 import { processPattern } from '../pattern/process';
 import { isAcceptedFile, loadPatternFile, MAX_SOURCE_DIMENSION } from '../pattern/loaders';
+import {
+  cancelVectorMagicSession,
+  getVectorMagicResult,
+  startVectorMagicDesktop,
+  type VectorMagicAutomationState,
+} from '../pattern/vectorMagicDesktop';
 import { summarise } from '../geometry/constraints';
 import { tileSizeMm } from '../pattern/sampler';
 import { NumberField, Section, Segmented, SliderField, Toggle } from './controls';
 import type { RawPattern } from '../pattern/types';
 
-type PreviewMode = 'original' | 'processed' | 'vector' | 'tiled';
+type PreviewMode = 'original' | 'processed' | 'tiled';
 
 export function PatternSection() {
   const { t, n } = useI18n();
@@ -24,13 +30,33 @@ export function PatternSection() {
 
   const [previewMode, setPreviewMode] = useState<PreviewMode>('processed');
   const [dragging, setDragging] = useState(false);
-  const [svgResolution, setSvgResolution] = useState(1024);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [vmProgress, setVmProgress] = useState<number | null>(null);
+  const [vmStage, setVmStage] = useState<VectorMagicAutomationState | null>(null);
+  const [vmStatus, setVmStatus] = useState<string | null>(null);
+  const vmAbortRef = useRef<AbortController | null>(null);
+  const vmSessionRef = useRef<string | null>(null);
+
+  const cancelVectorMagic = useCallback(() => {
+    const sessionId = vmSessionRef.current;
+    vmSessionRef.current = null;
+    if (sessionId) {
+      void cancelVectorMagicSession(sessionId).catch(() => {
+        // The helper may already have completed and closed between UI events.
+      });
+    }
+    vmAbortRef.current?.abort();
+    vmAbortRef.current = null;
+    setVmProgress(null);
+    setVmStage(null);
+    setVmStatus(null);
+  }, []);
 
   const handleFiles = useCallback(
     async (files: FileList | null) => {
       const file = files?.[0];
       if (!file) return;
+      cancelVectorMagic();
       if (!isAcceptedFile(file)) {
         setError({
           title: t('error.title'),
@@ -39,7 +65,7 @@ export function PatternSection() {
         return;
       }
       try {
-        const result = await loadPatternFile(file, svgResolution);
+        const result = await loadPatternFile(file, MAX_SOURCE_DIMENSION);
         const message = result.downsampledFrom
           ? t('warning.largeImage', {
               width: result.downsampledFrom.width,
@@ -59,7 +85,7 @@ export function PatternSection() {
         });
       }
     },
-    [setError, setPatternSource, svgResolution, t],
+    [cancelVectorMagic, setError, setPatternSource, t],
   );
 
   const summary = summarise(settings.cylinder, settings.relief);
@@ -74,48 +100,66 @@ export function PatternSection() {
     pattern !== null && Math.min(pattern.width, pattern.height) < 128;
   const seamWarning = seams !== null && Math.max(seams.horizontal, seams.vertical) > 0.25;
 
-  const [vmLoading, setVmLoading] = useState(false);
-  const [vmStatus, setVmStatus] = useState<string | null>(null);
+  useEffect(
+    () => () => {
+      vmAbortRef.current?.abort();
+      const sessionId = vmSessionRef.current;
+      if (sessionId) void cancelVectorMagicSession(sessionId).catch(() => undefined);
+    },
+    [],
+  );
 
   const openInVectorMagic = useCallback(async () => {
     if (!pattern) return;
-    setVmLoading(true);
+    cancelVectorMagic();
+    const controller = new AbortController();
+    vmAbortRef.current = controller;
+    setVmProgress(0.01);
+    setVmStage('launching');
     setVmStatus(null);
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = pattern.width;
-      canvas.height = pattern.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      const imgData = ctx.createImageData(pattern.width, pattern.height);
-      for (let i = 0; i < pattern.width * pattern.height; i++) {
-        const val = pattern.luminance[i];
-        imgData.data[i * 4] = val;
-        imgData.data[i * 4 + 1] = val;
-        imgData.data[i * 4 + 2] = val;
-        imgData.data[i * 4 + 3] = pattern.alpha ? pattern.alpha[i] : 255;
-      }
-      ctx.putImageData(imgData, 0, 0);
-      const dataUrl = canvas.toDataURL('image/png');
+      const session = await startVectorMagicDesktop(pattern, controller.signal);
+      vmSessionRef.current = session.sessionId;
 
-      const res = await fetch('/api/open-vector-magic', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataUrl }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setVmStatus('Vector Magic opened!');
-        setTimeout(() => setVmStatus(null), 4000);
-      } else {
-        setVmStatus(data.error || 'Could not launch Vector Magic');
+      while (!controller.signal.aborted) {
+        const result = await getVectorMagicResult(session.sessionId, controller.signal);
+        setVmProgress(result.progress);
+        setVmStage(result.state);
+        if (!result.ready) {
+          await abortableDelay(250, controller.signal);
+          continue;
+        }
+
+        const file = new File([result.svg], result.filename, {
+          type: 'image/svg+xml',
+          lastModified: Date.now(),
+        });
+        const loaded = await loadPatternFile(file, MAX_SOURCE_DIMENSION);
+        if (controller.signal.aborted) return;
+        setPatternSource(loaded.pattern, t('pattern.vectorMagicImported'));
+        setPreviewMode('processed');
+        setVmStatus(t('pattern.vectorMagicImported'));
+        return;
       }
-    } catch (err: any) {
-      setVmStatus(err.message || 'Error launching Vector Magic');
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      const code = error instanceof Error ? error.message : String(error);
+      setVmStatus(
+        code === 'VECTOR_MAGIC_NOT_INSTALLED'
+          ? t('error.vectorMagicNotInstalled')
+          : code === 'VECTOR_MAGIC_ALREADY_RUNNING' || code === 'VECTOR_MAGIC_BUSY'
+            ? t('error.vectorMagicAlreadyRunning')
+          : t('error.vectorMagicBridge', { message: code }),
+      );
     } finally {
-      setVmLoading(false);
+      if (vmAbortRef.current === controller) {
+        vmAbortRef.current = null;
+        vmSessionRef.current = null;
+        setVmProgress(null);
+        setVmStage(null);
+      }
     }
-  }, [pattern]);
+  }, [cancelVectorMagic, pattern, setPatternSource, t]);
 
   return (
     <Section title={t('section.pattern')}>
@@ -167,25 +211,51 @@ export function PatternSection() {
               {t('units.px')}
             </span>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {pattern.kind !== 'svg' && vmProgress === null && (
+                <button
+                  type="button"
+                  className="link"
+                  style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--accent, #63d0ff)' }}
+                  onClick={openInVectorMagic}
+                  title={t('tooltip.vectorMagicDesktop')}
+                >
+                  {`✨ ${t('action.openVectorMagic')}`}
+                </button>
+              )}
               <button
                 type="button"
                 className="link"
-                style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--accent, #63d0ff)' }}
-                onClick={openInVectorMagic}
-                disabled={vmLoading}
-                title="Launch Vector Magic Desktop (C:\Program Files (x86)\Vector Magic\vmde.exe)"
-              >
-                {vmLoading ? '...' : `✨ ${t('action.openVectorMagic')}`}
-              </button>
-              <button
-                type="button"
-                className="link"
-                onClick={() => setPatternSource(null)}
+                onClick={() => {
+                  cancelVectorMagic();
+                  setPatternSource(null);
+                }}
               >
                 {t('action.removePattern')}
               </button>
             </div>
           </div>
+          {vmProgress !== null && (
+            <div className="vector-magic-progress" role="status" aria-live="polite">
+              <div className="vector-magic-progress-label">
+                <span>{t('pattern.vectorMagicProgress')}</span>
+                <span>{Math.round(vmProgress * 100)}%</span>
+              </div>
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-label={t('pattern.vectorMagicProgress')}
+                aria-valuenow={Math.round(vmProgress * 100)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                data-stage={vmStage ?? 'launching'}
+              >
+                <div
+                  className="progress-fill"
+                  style={{ width: `${Math.max(2, vmProgress * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
           {vmStatus && <p className="notice" style={{ margin: '4px 0 8px 0' }}>{vmStatus}</p>}
 
           <Segmented<PreviewMode>
@@ -193,7 +263,6 @@ export function PatternSection() {
             options={[
               { value: 'original', label: t('pattern.original') },
               { value: 'processed', label: t('pattern.processed') },
-              { value: 'vector', label: t('pattern.vectorized') },
               { value: 'tiled', label: t('pattern.tilePreview') },
             ]}
             onChange={setPreviewMode}
@@ -222,7 +291,10 @@ export function PatternSection() {
               type="button"
               className="example"
               title={example.description}
-              onClick={() => setPatternSource(example.build(512))}
+              onClick={() => {
+                cancelVectorMagic();
+                setPatternSource(example.build(512));
+              }}
             >
               <ExampleThumb id={example.id} />
               <span>{example.label}</span>
@@ -260,46 +332,11 @@ export function PatternSection() {
             decimals={0}
             unit={t('units.px')}
           />
-          <SliderField
-            label={t('field.vectorizeSmoothness')}
-            value={patternSettings.vectorizeSmoothness}
-            onChange={(vectorizeSmoothness) => update({ vectorizeSmoothness })}
-            min={0.1}
-            max={3}
-            step={0.1}
-            decimals={1}
-            unit="px"
-            hint={t('tooltip.vectorize')}
-          />
-          <SliderField
-            label={t('field.vectorizeCornerThreshold')}
-            value={patternSettings.vectorizeCornerThreshold}
-            onChange={(vectorizeCornerThreshold) =>
-              update({ vectorizeCornerThreshold: Math.round(vectorizeCornerThreshold) })
-            }
-            min={20}
-            max={120}
-            step={1}
-            decimals={0}
-            unit={t('units.deg')}
-          />
         </>
       ) : null}
 
       <ImageAdjustments />
 
-      {pattern?.kind === 'svg' && (
-        <NumberField
-          label={t('pattern.svgResolution')}
-          value={svgResolution}
-          onChange={setSvgResolution}
-          min={128}
-          max={MAX_SOURCE_DIMENSION}
-          step={128}
-          decimals={0}
-          unit={t('units.px')}
-        />
-      )}
     </Section>
   );
 }
@@ -410,16 +447,9 @@ function PatternCanvas({ pattern, mode }: { pattern: RawPattern; mode: PreviewMo
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const settings = useStore((s) => s.settings.pattern);
 
-  const effectiveSettings = useMemo(() => {
-    if (mode === 'vector') {
-      return { ...settings, vectorize: true };
-    }
-    return settings;
-  }, [settings, mode]);
-
   const processed = useMemo(
-    () => (mode === 'original' ? null : processPattern(pattern, effectiveSettings)),
-    [pattern, effectiveSettings, mode],
+    () => (mode === 'original' ? null : processPattern(pattern, settings)),
+    [pattern, settings, mode],
   );
 
   useEffect(() => {
@@ -433,22 +463,6 @@ function PatternCanvas({ pattern, mode }: { pattern: RawPattern; mode: PreviewMo
     canvas.width = PREVIEW_SIZE;
     canvas.height = PREVIEW_SIZE;
     ctx.clearRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
-
-    if (mode === 'vector' && processed?.vectorSvg) {
-      // Render smooth vector SVG curves
-      const img = new Image();
-      const svgBlob = new Blob([processed.vectorSvg], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(svgBlob);
-      img.onload = () => {
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
-        ctx.imageSmoothingEnabled = true;
-        ctx.drawImage(img, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
-        URL.revokeObjectURL(url);
-      };
-      img.src = url;
-      return;
-    }
 
     const source = ctx.createImageData(width, height);
     for (let i = 0; i < width * height; i++) {
@@ -494,6 +508,24 @@ function PatternCanvas({ pattern, mode }: { pattern: RawPattern; mode: PreviewMo
   }, [pattern, processed, mode]);
 
   return <canvas ref={canvasRef} className="pattern-canvas" />;
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function ExampleThumb({ id }: { id: string }) {

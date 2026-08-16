@@ -1,6 +1,5 @@
 import type { PatternSettings } from '../types';
 import type { ProcessedPattern, RawPattern } from './types';
-import { autoVectorize } from './vectorizer';
 
 /**
  * ============================================================================
@@ -54,7 +53,6 @@ export function processPattern(
   // 4. Polarity and mode.
   let mask = new Uint8Array(n);
   const binary = settings.mode === 'binary';
-  let vectorSvg: string | undefined;
 
   if (binary) {
     const t = settings.threshold;
@@ -63,18 +61,6 @@ export function processPattern(
       mask[i] = carved ? 255 : 0;
     }
     if (settings.despeckle > 0) despeckle(mask, width, height, settings.despeckle);
-
-    // Auto-vectorize with sub-pixel curve fitting (VectorMagic / Potrace style)
-    // Runs automatically on all raster images to eliminate staircasing/pixelation.
-    if (raw.kind === 'raster' && settings.vectorize !== false) {
-      const vecRes = autoVectorize(mask, width, height, {
-        smoothness: settings.vectorizeSmoothness ?? 0.8,
-        cornerAngleDeg: settings.vectorizeCornerThreshold ?? 55,
-        minArea: settings.despeckle > 0 ? settings.despeckle : 3,
-      });
-      mask = new Uint8Array(vecRes.mask);
-      vectorSvg = vecRes.svg;
-    }
   } else {
     const steps = settings.quantize | 0;
     for (let i = 0; i < n; i++) {
@@ -100,7 +86,6 @@ export function processPattern(
     height,
     mask,
     binary: resultBinary,
-    vectorSvg,
     signature: patternSignature(raw, settings, softenPx),
   };
 }
@@ -245,9 +230,6 @@ export function patternSignature(
     s.invert ? 1 : 0,
     s.threshold,
     s.despeckle,
-    s.vectorize ? 1 : 0,
-    s.vectorizeSmoothness?.toFixed(2) ?? '0.8',
-    s.vectorizeCornerThreshold?.toFixed(0) ?? '55',
     s.brightness,
     s.contrast,
     s.gamma,

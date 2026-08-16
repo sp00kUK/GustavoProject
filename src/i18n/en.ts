@@ -8,7 +8,7 @@
 export const en = {
   'app.title': 'Cylindrical Pattern Debosser',
   'app.subtitle': 'Parametric pattern generator for printable rollers',
-  'app.privacy': 'Your pattern and model are processed locally in your browser.',
+  'app.privacy': 'Your pattern stays on this computer; model generation runs in your browser.',
   'app.untitled': 'Untitled Roller',
 
   'action.new': 'New',
@@ -27,7 +27,7 @@ export const en = {
   'action.redo': 'Redo',
   'action.loadExample': 'Load Example',
   'action.removePattern': 'Remove',
-  'action.openVectorMagic': 'Open in Vector Magic Desktop',
+  'action.openVectorMagic': 'Auto-vectorize with Vector Magic',
   'action.copyDebug': 'Copy Debug Info',
   'action.copied': 'Copied',
   'action.setMaxDepth': 'Set Maximum Safe Depth',
@@ -57,9 +57,6 @@ export const en = {
   'field.invert': 'Invert pattern',
   'field.threshold': 'Threshold',
   'field.despeckle': 'Despeckle',
-  'field.vectorize': 'Auto-vectorize (VectorMagic tracing)',
-  'field.vectorizeSmoothness': 'Vector smoothness',
-  'field.vectorizeCornerThreshold': 'Corner sharpness angle',
   'field.brightness': 'Brightness',
   'field.contrast': 'Contrast',
   'field.gamma': 'Gamma',
@@ -126,12 +123,12 @@ export const en = {
   'pattern.source': 'Source',
   'pattern.original': 'Original',
   'pattern.processed': 'Processed',
-  'pattern.vectorized': 'Vectorized (SVG)',
   'pattern.tilePreview': 'Tiling preview',
   'pattern.tileSize': 'Tile size',
   'pattern.examples': 'Example patterns',
   'pattern.none': 'No pattern loaded',
-  'pattern.svgResolution': 'SVG raster resolution',
+  'pattern.vectorMagicProgress': 'Vectorizing automatically with Vector Magic…',
+  'pattern.vectorMagicImported': 'The SVG exported by Vector Magic is now the active pattern.',
 
   'view.solid': 'Solid',
   'view.wireframe': 'Wireframe',
@@ -208,6 +205,11 @@ export const en = {
     'Export could not be generated at {quality} quality.\n\nTry:\n• a lower export quality\n• fewer pattern repetitions\n• a lower source resolution',
   'error.decodeFailed': 'That file could not be read as an image.',
   'error.svgFailed': 'That SVG could not be rasterised.',
+  'error.vectorMagicNotInstalled':
+    'Vector Magic Desktop was not found. Add it under vendor/vector-magic, set VECTOR_MAGIC_EXE, or install it in Program Files, then restart the local server.',
+  'error.vectorMagicAlreadyRunning':
+    'Close the existing Vector Magic Desktop window, then try again.',
+  'error.vectorMagicBridge': 'Vector Magic Desktop integration failed: {message}',
   'error.unsupportedFile': '{name} is not a supported format. Use PNG, JPG, WEBP or SVG.',
   'error.webgl':
     'This browser could not start WebGL. The 3D preview needs WebGL2 - try a current version of Chrome, Edge or Firefox.',
@@ -243,8 +245,8 @@ export const en = {
     'How the roller is laid out in the exported file. Exports are Z-up, which is what slicers expect.',
   'tooltip.tileFit':
     'How the source image maps into one repeat tile when its proportions differ from the tile.',
-  'tooltip.vectorize':
-    'Converts pixelated raster images into smooth mathematical Bézier curves (VectorMagic technology), preserving sharp star tips and arcs without quality loss.',
+  'tooltip.vectorMagicDesktop':
+    'Runs the local Vector Magic Desktop application invisibly in Fully Automatic mode, exports SVG, and imports its real output.',
 
   'help.title': 'Getting started',
   'help.step1': 'Set your roller dimensions.',

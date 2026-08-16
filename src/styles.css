@@ -593,6 +593,29 @@ input[type='range'] {
   font-size: 11px;
 }
 
+.vector-magic-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 10px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+}
+
+.vector-magic-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.vector-magic-progress .progress-track {
+  height: 7px;
+}
+
 .ellipsis {
   overflow: hidden;
   text-overflow: ellipsis;

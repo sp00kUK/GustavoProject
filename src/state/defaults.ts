@@ -24,10 +24,6 @@ export const DEFAULT_PATTERN: PatternSettings = {
   threshold: 0.5,
   despeckle: 0,
 
-  vectorize: true,
-  vectorizeSmoothness: 0.8,
-  vectorizeCornerThreshold: 55,
-
   brightness: 0,
   contrast: 0,
   gamma: 1,

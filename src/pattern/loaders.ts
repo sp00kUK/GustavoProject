@@ -26,7 +26,7 @@ export interface LoadResult {
 
 export async function loadPatternFile(
   file: File,
-  svgResolution = 1024,
+  svgResolution = MAX_SOURCE_DIMENSION,
 ): Promise<LoadResult> {
   const name = file.name;
   const isSvg = file.type === 'image/svg+xml' || /\.svg$/i.test(name);
@@ -39,21 +39,26 @@ export async function loadPatternFile(
  * -------------------------------------------------------------------- */
 
 async function loadRaster(file: File): Promise<LoadResult> {
+  const sourceBytes = new Uint8Array(await file.arrayBuffer());
   const bitmap = await decodeBitmap(file);
   try {
     const { width, height, scaled } = fitWithin(bitmap.width, bitmap.height);
     const rgba = drawToRGBA(bitmap, width, height, scaled);
     return {
-      pattern: rawFromRGBA(
-        `file:${file.name}:${file.size}:${file.lastModified}`,
-        file.name,
-        'raster',
-        rgba,
-        width,
-        height,
-        bitmap.width,
-        bitmap.height,
-      ),
+      pattern: {
+        ...rawFromRGBA(
+          `file:${file.name}:${file.size}:${file.lastModified}`,
+          file.name,
+          'raster',
+          rgba,
+          width,
+          height,
+          bitmap.width,
+          bitmap.height,
+        ),
+        sourceBytes,
+        sourceMimeType: normaliseRasterMimeType(file),
+      },
       ...(scaled ? { downsampledFrom: { width: bitmap.width, height: bitmap.height } } : {}),
     };
   } finally {
@@ -111,14 +116,18 @@ async function loadSvg(file: File, resolution: number): Promise<LoadResult> {
 
     const rgba = ctx.getImageData(0, 0, width, height).data;
     return {
-      pattern: rawFromRGBA(
-        `svg:${file.name}:${file.size}:${size}`,
-        file.name,
-        'svg',
-        rgba,
-        width,
-        height,
-      ),
+      pattern: {
+        ...rawFromRGBA(
+          `svg:${file.name}:${file.size}:${file.lastModified}:${size}`,
+          file.name,
+          'svg',
+          rgba,
+          width,
+          height,
+        ),
+        sourceBytes: new TextEncoder().encode(text),
+        sourceMimeType: 'image/svg+xml',
+      },
     };
   } catch (error) {
     if (error instanceof Error && error.message === 'SVG_UNSAFE') throw error;
@@ -215,4 +224,13 @@ function get2d(
 export function isAcceptedFile(file: File): boolean {
   if (ACCEPTED_TYPES.includes(file.type)) return true;
   return ACCEPTED_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext));
+}
+
+function normaliseRasterMimeType(file: File): string {
+  if (file.type === 'image/jpg') return 'image/jpeg';
+  if (ACCEPTED_TYPES.includes(file.type) && file.type !== 'image/svg+xml') return file.type;
+  const extension = file.name.toLowerCase().split('.').pop();
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+  if (extension === 'webp') return 'image/webp';
+  return 'image/png';
 }

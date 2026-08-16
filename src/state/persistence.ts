@@ -1,4 +1,4 @@
-import type { ProjectSettings } from '../types';
+import type { PatternSettings, ProjectSettings } from '../types';
 import type { Locale } from '../i18n';
 import type { RawPattern } from '../pattern/types';
 import { defaultProject } from './defaults';
@@ -70,10 +70,18 @@ export function loadUi(): Partial<PersistedUi> | null {
  */
 export function migrate(stored: Partial<ProjectSettings>): ProjectSettings {
   const base = defaultProject();
+  const pattern = { ...base.pattern, ...stored.pattern } as PatternSettings &
+    Record<string, unknown>;
+  // Builds from the abandoned substitute tracer persisted these fields. Drop
+  // them so old browser state cannot imply that any non-Vector-Magic tracer is
+  // still active.
+  delete pattern.vectorize;
+  delete pattern.vectorizeSmoothness;
+  delete pattern.vectorizeCornerThreshold;
   return {
     name: typeof stored.name === 'string' ? stored.name : base.name,
     cylinder: { ...base.cylinder, ...stored.cylinder },
-    pattern: { ...base.pattern, ...stored.pattern },
+    pattern,
     relief: { ...base.relief, ...stored.relief },
     quality: { ...base.quality, ...stored.quality },
     export: { ...base.export, ...stored.export },
@@ -118,6 +126,8 @@ export async function savePattern(pattern: RawPattern | null): Promise<void> {
             originalHeight: pattern.originalHeight,
             luminance: pattern.luminance,
             alpha: pattern.alpha,
+            sourceBytes: pattern.sourceBytes,
+            sourceMimeType: pattern.sourceMimeType,
           },
           PATTERN_KEY,
         );
@@ -148,6 +158,7 @@ export async function loadPattern(): Promise<RawPattern | null> {
       ...record,
       luminance: new Uint8Array(record.luminance),
       alpha: record.alpha ? new Uint8Array(record.alpha) : null,
+      sourceBytes: record.sourceBytes ? new Uint8Array(record.sourceBytes) : undefined,
     };
   } catch {
     return null;

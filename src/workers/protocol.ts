@@ -3,6 +3,7 @@ import type {
   ProjectSettings,
   ValidationReport,
 } from '../types';
+import type { PatternSourceKind } from '../pattern/types';
 import type { GenerationStage } from '../geometry/generateCylinderRelief';
 
 export type JobPurpose = 'preview' | 'export';
@@ -10,6 +11,7 @@ export type JobPurpose = 'preview' | 'export';
 export interface PatternPayload {
   id: string;
   name: string;
+  kind: PatternSourceKind;
   width: number;
   height: number;
   originalWidth: number;

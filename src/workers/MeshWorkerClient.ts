@@ -123,6 +123,7 @@ export class MeshWorkerClient {
       pattern: {
         id: pattern.id,
         name: pattern.name,
+        kind: pattern.kind,
         width: pattern.width,
         height: pattern.height,
         originalWidth: pattern.originalWidth,
