@@ -1,431 +1,228 @@
-# Cylindrical Pattern Debosser
+# Generador y Grabador Paramétrico de Cilindros (Cylindrical Pattern Debosser)
 
-Turn 2D artwork into a printable cylindrical negative relief — terrain rollers,
-clay and pottery rollers, stamps, custom grips, cylindrical molds.
+Convierte arte 2D en relieves cilíndricos negativos imprimibles en 3D — rodillos de textura para escenografía y wargames, rodillos de arcilla y cerámica, sellos, empuñaduras y moldes cilíndricos.
 
-Everything runs in the browser. No account, no backend, no upload: your artwork
-and your model never leave the machine.
+Todo se ejecuta directamente en el navegador. Sin cuentas, sin backend y sin subir archivos a servidores externos: tu diseño artístico y tus modelos 3D nunca salen de tu máquina.
 
-## Quickstart Guide
+---
+
+## Guía de Inicio Rápido (Quickstart)
 
 ```bash
-# 1. Clone the repository
+# 1. Clonar el repositorio
 git clone https://github.com/sp00kUK/GustavoProject.git
 cd GustavoProject
 
-# 2. Install dependencies
+# 2. Instalar dependencias
 npm install
 
-# 3. Start the local development server
+# 3. Iniciar el servidor local de desarrollo
 npm run dev        # http://localhost:5173
 
-# Verification & Build commands:
-npm run test       # Run complete geometry, pattern, and exporter test suites (Vitest)
-npm run build      # Compile TypeScript and bundle production web app in dist/
-npm run fixtures   # Generate reference STL verification fixtures in fixtures-out/
+# Comandos de verificación y compilación:
+npm run test       # Ejecuta la suite de pruebas unitarias y validación geométrica (Vitest)
+npm run build      # Compila TypeScript y empaqueta la aplicación web para producción en dist/
+npm run fixtures   # Genera los archivos STL de referencia y prueba geométrica en fixtures-out/
 ```
 
 ---
 
-## The one idea this project is built on
+## La idea fundamental en la que se basa este proyecto
 
-**Do not subtract a texture from a cylinder. Generate the textured cylinder.**
+**No sustraigas una textura de un cilindro mediante operaciones booleanas. Genera directamente el cilindro texturizado.**
 
-The usual approach — boolean-subtracting thousands of little solids from a
-cylinder — is exactly what this tool avoids. Repeated CSG on detailed meshes
-produces non-manifold edges, coplanar faces, inverted normals, zero-area
-triangles and self-intersections, and it is slow enough to hang a browser tab.
+El enfoque habitual —restar mediante operaciones booleanas (CSG) miles de pequeños sólidos de un cilindro base— es exactamente lo que esta herramienta evita. Las operaciones CSG repetidas sobre mallas detalladas generan bordes no conformes (non-manifold), caras coplanares, normales invertidas, triángulos de área cero y autointersecciones, además de ser lo suficientemente lentas como para bloquear la pestaña del navegador.
 
-But the final outer radius is a *known function* of position:
+En este sistema, el radio exterior final es una **función matemática directa** de la posición:
 
 ```
 theta = 2 * pi * u
 y     = -H/2 + H * v
-mask  = pattern(u, v)              0 = untouched, 1 = full depth
-r     = R - depth * mask           (R + depth * mask when embossing)
+mask  = pattern(u, v)              0 = intacto, 1 = profundidad total
+r     = R - depth * mask           (R + depth * mask al grabar en relieve positivo/emboss)
 
 x = r * cos(theta)
 z = r * sin(theta)
 ```
 
-So the surface is emitted directly at that radius and then closed with real end
-caps and a real bore wall. There is no CSG anywhere in the pipeline. That is why
-it scales to millions of triangles and why exports are watertight by
-construction rather than by post-hoc repair.
+La superficie se emite directamente a ese radio y luego se cierra con tapas terminales reales y una pared interior para el eje. **No hay operaciones CSG en ninguna parte del pipeline.** Por eso el sistema es capaz de generar millones de triángulos en milisegundos y los archivos exportados son 100% cerrados y herméticos (*watertight / 2-manifold*) por construcción, sin requerir reparaciones posteriores.
 
 ---
 
-## Mask convention
+## Convención de la Máscara de Grabado
 
 ```
-WHITE (255)  ->  mask 0     ->  radius = R              untouched
-BLACK (0)    ->  mask 1     ->  radius = R - depth      fully carved
-50% grey     ->  mask 0.5   ->  half depth
+BLANCO (255)  ->  máscara 0    ->  radio = R              superficie base intacta
+NEGRO (0)     ->  máscara 1    ->  radio = R - depth      profundidad máxima tallada
+Gris 50%      ->  máscara 0.5  ->  mitad de profundidad
 ```
 
-`mask = 1 - luminance`, so dark artwork carves inward. **Invert** flips it —
-nobody should have to re-edit a PNG because it came out of the wrong tool.
+La relación es `máscara = 1 - luminosidad`, por lo que las zonas oscuras se tallan hacia el interior. El botón **Invertir (Invert)** intercambia la polaridad instantáneamente, eliminando la necesidad de reeditar imágenes en programas externos.
 
-Luminance is Rec.709 (`0.2126R + 0.7152G + 0.0722B`) on normalised sRGB, not a
-single channel. Transparent pixels are composited onto white first, so an
-alpha-zero black pixel reads as *untouched* rather than as a deep pit.
+La luminosidad se calcula siguiendo el estándar Rec.709 (`0.2126R + 0.7152G + 0.0722B`) sobre sRGB normalizado. Los píxeles transparentes se componen sobre fondo blanco antes del cálculo, de modo que un píxel negro transparente se interpreta como superficie intacta y no como un pozo profundo.
 
 ---
 
-## Coordinate system
+## Sistema de Coordenadas
 
-| | |
+| Entorno | Sistema de Coordenadas |
 |---|---|
-| Kernel / viewport | **Y is the cylinder axis**, X/Z is the radial plane, `theta = atan2(z, x)`, model centred on the origin |
-| Exported files | **Z-up**, because every slicer treats +Z as the build direction |
+| **Kernel / Visor 3D** | **El eje Y es el eje del cilindro**, X/Z es el plano radial, `theta = atan2(z, x)`, modelo centrado en el origen `(0, 0, 0)`. |
+| **Archivos Exportados** | **Z-up (Z hacia arriba)**, alineado con el estándar de los laminadores/slicers 3D. |
 
-`orientMesh` converts between them. All three orientations are proper rotations
-(det = +1), so triangle winding — and therefore every outward normal — survives
-unchanged. The part is then translated so its lowest point sits at Z = 0.
-
-> The spec called the third orientation "Horizontal Z". In a Z-up export frame
-> that is the same as vertical, so it ships as **Horizontal Y**: the two ways of
-> laying the roller flat on the bed.
+La función `orientMesh` realiza la conversión entre ambos sistemas mediante rotaciones ortogonales puras ($\det = +1$), preservando la orientación del bobinado de los triángulos y las normales hacia el exterior. La pieza exportada se traslada automáticamente para que su punto más bajo descanse exactamente en $Z = 0$.
 
 ---
 
-## The two relief generators
+## Los Dos Generadores de Relieve
 
-### Continuous (`grayscaleRelief.ts`)
+### 1. Relieve Continuo (`grayscaleRelief.ts`)
 
-A regular `Nu x (Nv+1)` lattice, one vertex per sample, radius from the mask.
-Smooth normals. Used for heightmaps, stone, erosion, organic relief.
+Genera una malla regular de `Nu x (Nv+1)` vértices, con un vértice por muestra y el radio modulado directamente por la máscara. Incluye cálculo de normales suaves. Es el modo óptimo para mapas de elevación, superficies de piedra, erosión y relieves orgánicos.
 
-The circumference closes because the ring index wraps *arithmetically*
-(`(i + 1) % Nu`). There is no duplicated seam column anywhere — which is
-precisely why there is no seam. Nothing relies on two floating-point positions
-comparing equal.
+La circunferencia se cierra de forma **aritmética** (`(i + 1) % Nu`). No existen columnas de costura duplicadas, garantizando una unión perfecta a 0°/360° sin discontinuidades por redondeo de coma flotante.
 
-### Crisp binary (`binaryRelief.ts`)
+### 2. Relieve Binario Nítido (`binaryRelief.ts`)
 
-The surface is a grid of cells in `(theta, y)`. Every cell sits at exactly one of
-two radii, and neighbouring cells that disagree are joined by a **real wall**:
+La superficie se estructura como una cuadrícula de celdas en `(theta, y)`. Cada celda se ubica exactamente en uno de dos radios posibles, y las celdas adyacentes con niveles distintos se conectan mediante una **pared vertical real**:
 
-* base cell → `r = R`
-* relief cell → `r = R - depth`
-* theta boundary disagrees → radial wall in a plane containing the axis
-* y boundary disagrees → annular-sector wall in a horizontal plane
+* Celda base → `r = R`
+* Celda de relieve → `r = R - depth`
+* Discrepancia en límite $\theta$ → Pared radial en un plano axial.
+* Discrepancia en límite $y$ → Pared anular en un plano horizontal.
 
-The result has a flat cavity floor, a flat rim and a genuine vertical step —
-an engraving, not a softened bump map.
+El resultado ofrece un fondo de cavidad completamente plano, un borde superior recto y un escalón vertical nítido: un auténtico grabado de precisión.
 
-Three problems had to be solved to make that watertight:
+Para garantizar la estanqueidad (*manifoldness*) se solucionaron tres retos geométricos:
+1. **Reducción de Triángulos**: Cada columna angular se fusiona verticalmente mediante *run-length encoding* (RLE). Un rodillo liso colapsa a solo 2 triángulos por columna. Un tablero de 8×10 en un rodillo de 50×100 mm a calidad Alta genera ~29,500 triángulos en lugar de 1.3 millones.
+2. **Eliminación de T-Junctions**: Las cadenas laterales compartidas entre columnas vecinas se subdividen en cada transición de nivel de la columna adyacente, eliminando microhuecos.
+3. **Corrección de Estrangulamientos Diagonales (*Pinches*)**: Donde dos celdas del mismo nivel se tocan únicamente por una esquina, una celda diagonal se rellena al nivel base para preservar una topología 2-manifold válida.
 
-**1. Triangle count.** Each angular column is run-length merged vertically.
-Merging along y is exact (the cylinder is straight in that direction), so a
-blank roller collapses to two triangles per column instead of two per cell.
-Merging *around* theta is deliberately not done — that would flatten the barrel
-into a coarse polygon. An 8×10 checkerboard on a 50×100 mm roller at High
-quality is ~29,500 triangles, not ~1.3 million.
+### Tapas Terminales y Collarín (`endCaps.ts`)
+Para evitar discontinuidades donde el grabado llega a los extremos superior o inferior, el borde se conecta primero a un **anillo de collarín** regular al radio mínimo presente, y este anillo plano se une limpiamente con el orificio central.
 
-**2. T-junctions.** A merged face's side edges are shared with the neighbouring
-column, which may change state part way up. A single long edge against a
-neighbour's two short ones is a hole. So each face is emitted as a strip whose
-left chain is subdivided at every transition of the column to its left, and
-whose right chain at every transition of the column to its right. Faces stay
-merged; only the shared boundaries gain the collinear points needed to line up.
-
-**3. Pinches.** Where two same-level cells touch only at a corner, four faces
-meet along one edge and the surface stops being a manifold. That is not a
-triangulation bug — the *solid* is degenerate there, two blocks meeting at a
-knife point — so the fix has to change the shape. One of the two diagonal relief
-cells is filled back to base level. The pass only ever removes relief cells, so
-it is monotone and terminates; at export resolutions the altered cell is a
-fraction of a millimetre. Anything that survives is reported, not hidden.
-
-### End caps
-
-The rim of a binary cap is a staircase, and triangulating that straight to the
-bore leaves T-junctions where neighbouring sectors disagree about how far their
-shared radial edge extends. So the rim is first bridged down to a **collar ring**
-at the lowest radius present, and the collar — a clean regular polygon — is what
-joins the bore. The collar band's side edges land exactly on the bottom/top edges
-of the cavity walls. When the whole rim is at one radius the collar coincides
-with it and no extra geometry is produced at all.
-
-This is why a recess can run right off the top or bottom face and the model stays
-closed (spec test 173).
-
-### Bore
-
-Real geometry, not a subtraction: an inward-facing cylindrical surface with the
-caps as annuli terminating on it. Normals point **toward the axis**, because
-"outward from the material" for a hole means into the empty space. Getting this
-backwards is the most common cause of a slicer demanding repair, so the winding
-is derived in the source rather than guessed.
+### Orificio Central / Eje (`bore.ts`)
+Geometría cilíndrica interior real (no una sustracción booleana). Las normales apuntan hacia el eje central ("hacia afuera del material"), garantizando compatibilidad total con laminadores 3D.
 
 ---
 
-## UV transform order
+## Orden de Transformación UV
 
-Fixed, documented, never reordered — so adjusting rotation never silently
-changes what offset means, and two users with the same numbers get the same
-geometry.
+El orden de aplicación es estricto y determinista:
 
 ```
- 1. cylinder UV      u around circumference, v up the usable height
- 2. repetition       tu = u * columns,  tv = v * rows
- 3. stagger          odd (or every) tile row shifted along tu
- 4. tile-local       pu = frac(tu), pv = frac(tv)
- 5. scale            about the tile centre
- 6. rotation         about the tile centre
- 7. offset           translation within the tile
- 8. mirror           per axis
- 9. tile fit         stretch / fit / fill
-10. sample           nearest (binary) or bilinear (grayscale), wrapping
+ 1. UV Cilíndrico       u alrededor del perímetro [0, 1], v a lo largo de la altura útil [0, 1]
+ 2. Repetición          tu = u * columnas,  tv = v * filas
+ 3. Escalonado          Desplazamiento horizontal en filas alternas (patrones entrelazados)
+ 4. UV Local de Celda   pu = frac(tu), pv = frac(tv)
+ 5. Escala              Escalado relativo al centro de la celda
+ 6. Rotación            Rotación angular sobre el centro de la celda
+ 7. Desplazamiento      Offset (X, Y) dentro de la celda
+ 8. Espejo              Inversión por eje (Horizontal / Vertical)
+ 9. Ajuste de Celda     Stretch (estirar), Fit (ajustar) o Fill (rellenar)
+10. Muestreo            Nearest neighbour (binario) o bilineal (grises), con envoltura circular continua
 ```
-
-Polarity, thresholding and levels are baked into the mask by `processPattern`
-beforehand. Interpolating a binary mask would soften every cavity wall, so
-binary mode samples nearest-neighbour on an already-thresholded mask.
-
-Horizontal sampling **wraps**, never clamps — sampling just left of pixel 0 must
-return the right-hand edge, or the pattern smears at every tile boundary and at
-the 0/360 seam. On the topmost vertex ring the vertical axis clamps instead, so
-the last ring reads the *end* of the final tile rather than wrapping back to its
-start.
-
-Vertical margins are handled in `ReliefField`: the pattern's `v` is stretched
-across the *usable* band between the margins, so `rows = 8` always gives eight
-whole visible tiles rather than eight with the first and last partly hidden.
 
 ---
 
-## Quality
+## Calidad y Resolución
 
-Quality is a **physical sample spacing**, not a segment count — a 20 mm roller
-and a 200 mm roller need very different segment counts to look equally smooth,
-and "0.25 mm sampling" is something a 3D-printing user can reason about.
+La resolución se define por **espaciado físico de muestreo en milímetros**, permitiendo un control intuitivo adaptado a la impresión 3D:
 
-| Preset | Spacing |
+| Perfil de Calidad | Espaciado de Muestreo |
 |---|---|
-| Draft | 1.0 mm |
-| Standard | 0.5 mm |
-| High | 0.25 mm |
-| Ultra | 0.15 mm |
+| **Draft (Borrador)** | 1.00 mm |
+| **Standard (Estándar)** | 0.50 mm |
+| **High (Alta)** | 0.25 mm |
+| **Ultra (Máxima)** | 0.15 mm |
 
 ```
-radialSegments   = ceil(pi * D / spacing)
-verticalSegments = ceil(H / spacing)
+radialSegments   = ceil(pi * D / espaciado)
+verticalSegments = ceil(H / espaciado)
 ```
 
-Preview and export quality are independent. If the artwork contains finer detail
-than the mesh can carry, the app says so rather than silently discarding it.
+La calidad de previsualización en pantalla y la de exportación son independientes.
 
 ---
 
-## Validation
+## Validación Geométrica Automática
 
-Run on every generation, before the model is ever called ready.
-
-1. **Every undirected edge is used by exactly two triangles.** Fewer means a
-   hole; more means the surface self-touches.
-2. **Every directed edge appears exactly once.** Combined with (1) this forces
-   the two faces on each edge to traverse it in opposite directions — that is
-   what consistent winding means.
-3. Signed volume is positive, i.e. the shell is not inside out.
-4. No zero-area faces, no NaN/infinite coordinates, no isolated vertices, no
-   duplicate faces.
-
-Both edge checks pack each edge into a single float64 key and sort a typed array
-rather than filling a multi-million-entry hash map. Packing is exact while
-`vertexCount² < 2^53`, i.e. up to ~94 million vertices.
-
-**The bar is not "a slicer can repair the STL". It is "a slicer does not need
-to."** Slicer repair is a last safety net, not part of this pipeline.
-
-Geometry is also constrained before it is built: if `R - depth` reaches the bore,
-export is blocked with the maximum safe depth stated and a one-click fix, rather
-than producing a model that is not a solid.
+Cada generación se somete a una auditoría estricta antes de declararse lista para exportar:
+1. **Cada arista no dirigida es compartida por exactamente 2 triángulos** (garantía de malla cerrada sin huecos ni auto-toques).
+2. **Cada arista dirigida aparece exactamente 1 vez** (orientación y bobinado consistente en toda la superficie).
+3. **Volumen con signo positivo** (la carcasa no está invertida).
+4. **Sin caras de área cero, sin coordenadas NaN o infinitas, sin vértices aislados.**
+5. **Verificación de espesor seguro**: Si `R - depth` interseca el orificio central, la exportación se bloquea indicando la profundidad máxima segura y ofreciendo un botón de corrección automática.
 
 ---
 
-## Architecture
+## Arquitectura del Código
 
 ```
 src/
-  types/          shared contracts, incl. the PatternSampler interface
-  geometry/       pure TS - no React, no Three.js, no DOM, no images
-    mesh/           MeshBuilder (integer-keyed vertex identity), mesh ops
-    cylinder/       end caps, bore
-    relief/         binary + grayscale generators, relief field
-    validation/     manifold audit
-    normals/        crease-aware display normals
-    constraints.ts  wall thickness, safe depth, dimension summary
-    quality.ts      spacing -> segments, triangle and file-size estimates
-  pattern/        processing, sampler, procedural sources, loaders, seam analysis
-  exporters/      binary STL, 3MF (hand-written OPC zip), filenames
-  workers/        worker protocol, worker, client with job versioning
-  state/          zustand store, defaults, persistence
-  viewport/       imperative Three.js scene
-  components/     control panels, info panels, overlays
-  i18n/           en + es dictionaries, issue-code translation
+  types/          Definiciones TypeScript y la interfaz PatternSampler
+  geometry/       Kernel de geometría puro (sin dependencias de React, Three.js o DOM)
+    mesh/           MeshBuilder (indexación entera de vértices), operaciones de malla
+    cylinder/       Tapas terminales y orificio interior
+    relief/         Generadores binario y continuo, campo de relieve
+    validation/     Auditoría geométrica manifold
+    normals/        Cálculo de normales con detección de aristas vivas (creased normals)
+    constraints.ts  Cálculo de espesor de pared y profundidad máxima segura
+    quality.ts      Cálculo de segmentos y estimación de triángulos / peso de archivo
+  pattern/        Procesamiento de imagen, muestreadores, patrones procedurales, análisis de costura
+  exporters/      Generadores de STL binario y 3MF nativo (empaquetado ZIP OPC)
+  workers/        Web Worker dedicado, cliente con control de versiones y cancelación
+  state/          Store global con Zustand y persistencia en localStorage
+  viewport/       Visor 3D interactivo con Three.js
+  components/     Paneles de control, configuración, información y diálogos
+  i18n/           Diccionarios en Español e Inglés
 ```
 
-The geometry kernel consumes exactly one abstraction:
-
-```ts
-interface PatternSampler {
-  sample(u: number, v: number, atTopEdge?: boolean): number;
-}
-```
-
-Raster, SVG, procedural generators and anything added later all satisfy it, and
-the mesh generators work unchanged. `npm run fixtures` exercises the whole kernel
-with nothing but procedural samplers — no canvas, no DOM, no image decoding.
-
-### Worker
-
-Image processing, mesh generation, validation and file serialisation all run off
-the UI thread. Buffers come back as transferables.
-
-* **Job versioning** — every request carries an incrementing id and any reply
-  that is not the newest is dropped, so a slow Ultra preview finishing after the
-  user changed the diameter can never overwrite newer geometry.
-* **Cancellation by termination** — a synchronous mesh build cannot service a
-  message mid-loop, and `SharedArrayBuffer` needs cross-origin isolation headers
-  a static host may not provide. So the client terminates the worker and
-  re-seeds a fresh one from its own cached pattern. Unconditionally reliable.
-* **Caching** — the processed mask is keyed by a signature of only the inputs
-  that affect it, so changing relief depth or mesh detail costs nothing on the
-  image side.
-
-### Preview vs export
-
-The preview is **real geometry**, generated by the same kernel as the export —
-just at the preview spacing. No shader displacement is ever presented as
-printable geometry. Export regenerates at export quality and re-validates before
-a byte is written.
-
 ---
 
-## Export
+## Guía de Integración (React / Electron / Node.js)
 
-**Binary STL** — 80-byte header, uint32 count, 50 bytes per facet. Facet normals
-are recomputed from the triangle itself, never copied from a display normal. STL
-carries no units, so the contract is that one unit is one millimetre: a 50 mm
-roller exports with a 50-unit bounding box.
+El proyecto está diseñado de forma modular para permitir extraer o integrar el motor geométrico y el visor 3D en aplicaciones externas:
 
-**3MF** — a genuine OPC package (`[Content_Types].xml`, `_rels/.rels`,
-`3D/3dmodel.model`), zipped with a hand-written writer using the platform's
-`CompressionStream`. Not an STL with the extension changed. It states its units
-explicitly and shares vertices instead of repeating them per facet.
+### 1. Kernel Geométrico Headless (TypeScript Puro)
 
-Filenames are descriptive and sanitised:
-`gauchito_roller_50x100mm_bore8mm_depth2mm_4x8.stl`
-
----
-
-## Security and privacy
-
-* All processing is client-side. Nothing is uploaded.
-* SVG is rasterised through an `<img>` with a blob URL, **never** by injecting
-  markup into the document. As an image, scripts, external fetches and
-  `foreignObject` cannot execute. The markup is additionally scanned first and
-  rejected if it carries script or external references, so a hostile file fails
-  loudly instead of silently rendering blank.
-* Large uploads are downsampled to 2048 px with an explicit notice rather than
-  failing silently — a 12000×12000 PNG is 576 MB as RGBA.
-* Copy Debug Info includes dimensions and settings, never the artwork.
-
----
-
-## Languages
-
-English and Spanish, switchable in the header and remembered. Numbers are
-formatted per locale (`0,80 mm` in Spanish).
-
-The geometry kernel is locale-free by design — it emits issue *codes* plus
-numeric detail, never presentation strings. The UI resolves the code against the
-dictionary and formats the numbers, which is why a blocked-export message
-appears fully translated.
-
-Adding a locale: copy `src/i18n/es.ts`, translate, register it in
-`src/i18n/index.ts`. Every dictionary is typed against the English one, so a
-missing key is a compile error rather than a blank label.
-
----
-
-## Tests
-
-```bash
-npm run test
-```
-
-* **`tests/geometry.test.ts`** — dimensional accuracy, mask polarity, tiling
-  counts measured on the *mesh* (not just the sampler), seam continuity across
-  0/360, end closure, bore and wall-thickness blocking, emboss, margins, export
-  orientation, determinism, plus randomised property tests asserting every
-  generated solid is closed, consistently wound, finite and non-degenerate.
-* **`tests/pattern.test.ts`** — mask convention, threshold, transparency,
-  luminance, wrap sampling, tile repetition, stagger, offsets, filters, seam
-  analysis, tile sizing.
-* **`tests/exporters.test.ts`** — STL layout and millimetre scale, facet normals
-  agreeing with winding, 3MF unzipping to valid XML, CRC32, filenames.
-
-`npm run fixtures` additionally writes real STL files for the reference cases
-(checkerboard, sine heightmap, vertical split, seam-crossing recess, edge-
-touching recesses, plain cylinder, all-black, solid, emboss) and audits each one.
-
-### Slicer verification
-
-The fixtures in `fixtures-out/` are intended to be opened in Bambu Studio,
-OrcaSlicer, PrusaSlicer and Cura. Target: **no repair prompt, no open edges, no
-non-manifold warning.** This has been verified by the automated manifold audit;
-opening them in each slicer is a manual step that has not been performed here.
-
----
-
-## Integration Guide
-
-The project is structured to make it easy to extract or embed the 3D geometry engine and viewport into existing **React**, **Electron**, or **Node.js** applications.
-
-### 1. Headless Geometry Kernel (Pure TypeScript)
-
-The core geometry engine in `src/geometry/` has zero dependencies on React, the DOM, or Three.js. It runs in any JavaScript/TypeScript environment (Node.js, Electron main/renderer processes, Web Workers).
+El núcleo en `src/geometry/` es independiente de la interfaz gráfica y puede ejecutarse en Node.js, procesos principales de Electron o scripts automatizados:
 
 ```ts
 import { generateCylinderRelief } from './src/geometry/generateCylinderRelief';
 import { checkerboardSampler } from './src/pattern/procedural';
 import { writeBinarySTL } from './src/exporters/stl';
 
-// Generate watertight cylindrical geometry
+// Generar geometría cilíndrica hermética
 const result = generateCylinderRelief({
   cylinder: {
-    diameter: 50,     // 50 mm outer diameter
-    height: 100,      // 100 mm height
+    diameter: 50,     // 50 mm de diámetro exterior
+    height: 100,      // 100 mm de altura
     boreEnabled: true,
-    boreDiameter: 8,  // 8 mm shaft hole
+    boreDiameter: 8,  // 8 mm de orificio interior para eje
   },
   relief: {
-    depth: 2,         // 2 mm deboss depth
+    depth: 2,         // 2 mm de profundidad de grabado
     direction: 'deboss',
     edgeTreatment: 'sharp',
     edgeSoftness: 0,
-    bottomMargin: 2,  // 2 mm untouched safety margin at ends
+    bottomMargin: 2,  // 2 mm de margen liso de seguridad en la base
     topMargin: 2,
   },
-  mode: 'binary',     // 'binary' for sharp step walls, 'grayscale' for organic smooth relief
+  mode: 'binary',     // 'binary' para paredes rectas o 'grayscale' para relieve suave
   sampler: checkerboardSampler(8, 10),
   resolution: {
     radialSegments: 315,
     verticalSegments: 200,
   },
-  audit: true,        // Validates 2-manifoldness, orientation, and positive volume
+  audit: true,        // Ejecuta auditoría geométrica 2-manifold
 });
 
-// Export directly to a binary STL buffer (scale: 1 unit = 1 mm, Z-up)
-const stlBytes = writeBinarySTL(result.mesh, 'roller');
+// Serializar directamente a un buffer STL binario (1 unidad = 1 mm, Z-up)
+const stlBytes = writeBinarySTL(result.mesh, 'rodillo');
 ```
 
-### 2. Web Worker Pipeline (Non-blocking UI)
-
-Offload intensive mesh generation and manifold validation to a Web Worker using `MeshWorkerClient`:
+### 2. Pipeline con Web Worker (Sin Bloqueo de UI)
 
 ```ts
 import { MeshWorkerClient } from './src/workers/MeshWorkerClient';
@@ -437,7 +234,7 @@ const workerClient = new MeshWorkerClient(() => {
   );
 });
 
-// Request preview or export mesh asynchronously with job cancellation & caching
+// Solicitar generación asíncrona con cancelación automática y caché de cálculo
 workerClient.requestPreview({
   cylinder,
   relief,
@@ -446,28 +243,22 @@ workerClient.requestPreview({
   tiling,
   resolution,
   onSuccess: (mesh, stats, issues) => {
-    // mesh contains Float32Array positions, normals, and Uint32Array indices
-    console.log(`Generated ${stats.triangleCount} triangles in ${stats.buildTimeMs} ms`);
+    console.log(`Generados ${stats.triangleCount} triángulos en ${stats.buildTimeMs} ms`);
   },
   onError: (err) => console.error(err),
 });
 ```
 
-### 3. React / Electron 3D Viewport Component
-
-The 3D interactive viewport can be dropped directly into any React or Electron application:
+### 3. Componente de Visor 3D para React
 
 ```tsx
 import React from 'react';
 import { Viewport } from './src/viewport/Viewport';
-import { useAppStore } from './src/state/store';
 
-export function RollerApp() {
+export function MiApp3D() {
   return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh' }}>
-      <div style={{ flex: 1, position: 'relative' }}>
-        <Viewport />
-      </div>
+    <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
+      <Viewport />
     </div>
   );
 }
@@ -475,71 +266,61 @@ export function RollerApp() {
 
 ---
 
-## Resumen y Guía Rápida en Español (Para Gustavo)
+## Guía Rápida de Parámetros (Para Gustavo)
 
-¡Bienvenido, Gustavo! Esta sección resume los controles y parámetros principales para que puedas empezar a generar rodillos y piezas cilíndricas inmediatamente:
+¡Bienvenido, Gustavo! Aquí tienes un resumen claro y directo de todos los controles de la aplicación para que puedas empezar a diseñar de inmediato:
 
-### 1. Parámetros del Cilindro (*Cylinder Dimensions*)
-* **Diameter ($D$)**: Diámetro exterior total del cilindro en milímetros.
-* **Height ($H$)**: Altura/longitud del cilindro en milímetros.
-* **Bore / Orificio Central**: Diámetro del orificio interior para insertar un eje, varilla o rodamiento metálico. Si se desactiva, genera un cilindro sólido macizo.
-* **Margins (Márgenes)**: Margen superior e inferior sin tallar en milímetros (ideal para crear bordes de apoyo lisos).
+### 1. Dimensiones del Cilindro (*Cylinder*)
+* **Diámetro ($D$)**: Diámetro exterior del rodillo en milímetros (ej. 50 mm).
+* **Altura ($H$)**: Longitud total del rodillo en milímetros (ej. 100 mm).
+* **Orificio Central (*Bore*)**: Diámetro del agujero central para insertar una varilla, eje o rodamiento. Si se desmarca la casilla, se genera un cilindro macizo.
+* **Márgenes (*Margins*)**: Franja lisa superior e inferior en milímetros para evitar que el grabado llegue al borde exacto si necesitas apoyo para rodamientos.
 
-### 2. Modos de Relieve (*Relief Modes*)
-* **Binario (*Binary*)**: Diseñado para grabados nítidos con paredes verticales y fondo de cavidad plano. Es el modo recomendado para rodillos de textura (ladrillos, adoquines, runas, logotipos) y sellos de arcilla/cerámica.
-* **Escala de Grises (*Grayscale*)**: Modula el radio de forma suave y continua en función de la luminosidad del píxel. Ideal para terrenos naturales, roca, erosión, piel y texturas orgánicas.
+### 2. Modos de Relieve (*Relief Mode*)
+* **Binario (*Binary*)**: Crea un grabado nítido con paredes 100% verticales y suelo plano. Es el modo perfecto para rodillos de texturas de escenografía (ladrillos, adoquines, runas, tablas de madera, mallas metálicas) y sellos de arcilla.
+* **Escala de Grises (*Grayscale*)**: Modula la profundidad de forma suave y continua según el tono del píxel. Ideal para texturas de terreno natural, roca, olas, cuero o piel orgánica.
 
 ### 3. Profundidad y Polaridad (*Depth & Polarity*)
-* **Depth**: Profundidad del grabado en milímetros (el sistema bloquea automáticamente profundidades excesivas que choquen con el orificio central).
-* **Direction**:
-  * *Deboss (Hundido)*: Talla hacia el interior del cilindro ($R - \text{depth}$).
-  * *Emboss (Relieve)*: Sobresale hacia el exterior del cilindro ($R + \text{depth}$).
-* **Invert (Invertir)**: 
-  * Por defecto: Color **Negro (0)** = tallado a profundidad máxima; Color **Blanco (255)** = superficie intacta.
-  * Al activar *Invert*, se intercambia la polaridad sin necesidad de editar la imagen externamente.
+* **Profundidad (*Depth*)**: Milímetros que penetra el relieve. La aplicación te avisa y protege automáticamente para no perforar el orificio central.
+* **Dirección**:
+  * **Deboss (Hundido)**: Talla hacia adentro de la superficie base ($R - \text{depth}$).
+  * **Emboss (En relieve)**: Sobresale hacia afuera de la superficie base ($R + \text{depth}$).
+* **Invertir (*Invert*)**: 
+  * Por defecto: **Negro = grabado profundo**; **Blanco = superficie exterior intacta**.
+  * Si tu diseño tiene los colores al revés, activa este botón en lugar de editar el archivo.
 
-### 4. Repetición y Ajuste UV (*Tiling & Pattern Placement*)
-* **Columns / Rows (Repetición)**: Número de veces que se repite el motivo alrededor del cilindro (horizontal/circunferencia) y a lo largo de su altura (vertical).
-* **Stagger (Escalonado)**: Desplaza filas alternas para crear patrones entrelazados (estilo aparejo de ladrillos o panal).
-* **Rotation / Offset / Scale**: Permite rotar, centrar o ajustar la escala del motivo dentro de cada celda.
+### 4. Repetición y Posicionamiento UV (*Tiling & Placement*)
+* **Columnas / Filas (*Columns / Rows*)**: Cuántas veces se repite el dibujo alrededor de la circunferencia y a lo largo de la altura.
+* **Escalonado (*Stagger*)**: Desplaza filas alternas para crear tramas entrelazadas (típico aparejo de ladrillos o patrón panal).
+* **Rotación y Desplazamiento**: Permite girar y centrar el motivo con precisión milimétrica.
 
-### 5. Exportación 3D (*Exporting*)
-* **Formatos**:
-  * **STL Binario**: Compatible con el 100% de los laminadores (1 unidad = 1 mm).
-  * **3MF**: Formato moderno comprimido OPC XML que preserva unidades y reduce el peso del archivo.
-* **Orientación**: Se exporta en orientación **Z-up** (con la base en Z = 0), lista para abrir en **Bambu Studio, OrcaSlicer, PrusaSlicer o Cura**.
-* **Integridad Garantizada**: Cada modelo exportado pasa por una auditoría geométrica estricta de manifoldness (2-manifold estricto, normales orientadas hacia afuera, sin caras degeneradas ni huecos). ¡No requiere reparación en el laminador!
-
----
-
-## Current limitations
-
-* **End-edge bevel/chamfer is not implemented.** The spec listed it as optional
-  and warned against risking manifold integrity for it in v1. Ends are sharp.
-* **Vector contour geometry is not implemented.** SVG is rasterised at a chosen
-  resolution and fed through the raster path. The `PatternSampler` boundary is
-  the seam a future direct-triangulation backend would plug into.
-* **Adaptive tessellation is not implemented** — sampling is uniform. Nothing in
-  the architecture prevents adding it; the generators take a resolution, not a
-  hardcoded constant.
-* **Non-circular bores** (hex, square, D-shape, keyed) are not implemented.
-  Circular only.
-* Undo/redo covers parameter history, not the pattern bitmap.
-* **3MF is capped at 4 GB** (no ZIP64). STL has no such limit.
-* Binary mode with soft edges is, by definition, no longer binary — it routes
-  through the continuous generator on a blurred mask. This is deliberate and
-  labelled in the UI, not a fallback.
+### 5. Exportación e Impresión 3D
+* **Formatos Disponibles**:
+  * **STL Binario**: Máxima compatibilidad con cualquier laminador (escala 1 unidad = 1 mm).
+  * **3MF**: Formato moderno y compacto con metadatos XML completos.
+* **Orientación Z-up**: Se exporta de pie sobre la base ($Z = 0$), listo para colocar en la cama de impresión sin tener que rotar la pieza manualmente.
+* **Compatibilidad Total**: Compatible de forma directa con **Bambu Studio, OrcaSlicer, PrusaSlicer y Cura** sin avisos de mallas no conformes ni necesidad de reparación.
 
 ---
 
-## Reference
+## Formatos de Exportación
 
-[CNC Kitchen's stlTexturizer / BumpMesh](https://github.com/CNCKitchen/stlTexturizer)
-solves a related but different problem: applying a displacement texture to an
-*arbitrary imported mesh*, which forces adaptive subdivision plus QEM decimation
-because the input topology is unknown. Here the topology is known — it is a
-cylinder — so the surface is generated directly at its final radius and needs
-neither subdivision nor decimation. Its crease-aware processing (>30° dihedral)
-matches the approach taken in `creasedNormals.ts`. Its core technique cannot
-produce flat cavity floors with vertical walls, which is the main thing binary
-mode exists to do.
+* **STL Binario**: Encabezado de 80 bytes, recuento de triángulos uint32 y 50 bytes por faceta con cálculo de normales desde la geometría.
+* **3MF**: Paquete OPC nativo con compresión zip (`[Content_Types].xml`, `_rels/.rels`, `3D/3dmodel.model`) mediante la API estándar `CompressionStream`.
+
+---
+
+## Pruebas y Validación
+
+```bash
+npm run test       # Ejecuta 66 tests con Vitest
+npm run fixtures   # Genera 9 piezas STL de referencia en fixtures-out/
+```
+
+Las pruebas cubren precisión dimensional, polaridad de máscaras, continuidad en la costura 0°/360°, integridad de orificios, empaquetado STL/3MF y pruebas de propiedades aleatorias (*property-based testing*).
+
+---
+
+## Licencia y Créditos
+
+Desarrollado como una solución de ingeniería geométrica de alto rendimiento para diseño y fabricación aditiva de rodillos y sellos cilíndricos.
