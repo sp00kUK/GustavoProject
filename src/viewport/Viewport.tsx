@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useStore, type ViewMode } from '../state/store';
 import type { PrintableMesh } from '../types';
+import { buildAdjacency, buildExclusionOverlayGeo, bucketFill, radiusBrushSelect, type AdjacencyData } from './exclusion';
 
 export type CameraView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso';
 
@@ -27,18 +28,24 @@ interface ViewportProps {
  * megabytes of GPU memory; leaking one per slider drag would exhaust a tab in
  * under a minute.
  */
+export type TankardPartId = 'body' | 'topRim' | 'bottomRim' | 'handle';
+
+export interface SceneState {
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  solid: THREE.Mesh;
+  wire: THREE.LineSegments;
+  materials: Record<ViewMode, THREE.Material>;
+  disposed: boolean;
+  refreshOverlay?: () => void;
+  invalidateAdjacency?: () => void;
+}
+
 export function Viewport({ onReady, onFps, onError }: ViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const stateRef = useRef<{
-    renderer: THREE.WebGLRenderer;
-    scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    controls: OrbitControls;
-    solid: THREE.Mesh;
-    wire: THREE.LineSegments;
-    materials: Record<ViewMode, THREE.Material>;
-    disposed: boolean;
-  } | null>(null);
+  const stateRef = useRef<SceneState | null>(null);
 
   const lastFitRadius = useRef<number | null>(null);
   const preview = useStore((s) => s.preview);
@@ -109,9 +116,10 @@ export function Viewport({ onReady, onFps, onError }: ViewportProps) {
 
     const materials: Record<ViewMode, THREE.Material> = {
       solid: new THREE.MeshStandardMaterial({
-        color: 0xb9c0cc,
-        roughness: 0.72,
-        metalness: 0.04,
+        color: 0xa4b9d6,
+        roughness: 0.62,
+        metalness: 0.08,
+        vertexColors: false,
         side: THREE.FrontSide,
       }),
       wireframe: new THREE.MeshStandardMaterial({
@@ -126,13 +134,13 @@ export function Viewport({ onReady, onFps, onError }: ViewportProps) {
         color: 0xb9c0cc,
         roughness: 0.72,
         metalness: 0.04,
-        vertexColors: true,
+        vertexColors: false,
       }),
       heatmap: new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0.85,
-        metalness: 0,
-        vertexColors: true,
+        color: 0xa4b9d6,
+        roughness: 0.62,
+        metalness: 0.08,
+        vertexColors: false,
       }),
     };
 
@@ -146,7 +154,7 @@ export function Viewport({ onReady, onFps, onError }: ViewportProps) {
     wire.visible = false;
     scene.add(wire);
 
-    const state = {
+    const state: SceneState = {
       renderer,
       scene,
       camera,
@@ -191,11 +199,378 @@ export function Viewport({ onReady, onFps, onError }: ViewportProps) {
       fit: () => fitCamera(state),
     });
 
+    /* -- Pointer interaction for 3D Mask Painting & Tools ------------- */
+    /* Ported 1:1 from Bumpmesh (stlTexturizer): uses face-index Sets,
+       BFS flood fill with dihedral angle adjacency, and a separate
+       overlay mesh for visualisation.                                  */
+    const raycaster = new THREE.Raycaster();
+    const ndcResult = new THREE.Vector2();
+    let isPainting = false;
+    let adjacencyData: AdjacencyData | null = null;
+    let exclusionOverlayMesh: THREE.Mesh | null = null;
+    const exclMaterial = new THREE.MeshBasicMaterial({
+      color: 0xff6600,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+
+    const brushCursorGeo = new THREE.EdgesGeometry(new THREE.CircleGeometry(1, 64));
+    const brushCursorMat = new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.8,
+      depthTest: false
+    });
+    const brushCursor = new THREE.LineSegments(brushCursorGeo, brushCursorMat);
+    brushCursor.renderOrder = 999;
+    brushCursor.visible = false;
+    scene.add(brushCursor);
+
+    const canvasNDC = (e: MouseEvent | PointerEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      ndcResult.set(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        ((e.clientY - rect.top) / rect.height) * -2 + 1,
+      );
+      return ndcResult;
+    };
+
+
+
+    /**
+     * Get the front-face hit (face normal pointing toward camera).
+     * Mirrors Bumpmesh's getFrontFaceHit — needed because DoubleSide
+     * materials can return back-face hits that are closer.
+     */
+    const getFrontFaceHit = (hits: THREE.Intersection[]) => {
+      // NOTE: For hollow cylinders (or if camera is inside?), normal might point opposite of what we expect
+      // If backface culling is off, we must ensure we only pick front faces.
+      // But we just use the first hit, except we filter out hits where normal is pointing away.
+      if (!hits.length) return undefined;
+      const mesh = stateRef.current?.solid;
+      if (!mesh) return hits[0];
+      const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+      for (const h of hits) {
+        if (h.face) {
+          const worldNormal = h.face.normal.clone().applyMatrix3(normalMatrix).normalize();
+          if (worldNormal.dot(raycaster.ray.direction) < 0) {
+            return h;
+          }
+        }
+      }
+      return hits[0];
+    };
+
+    const pickTriangle = (e: MouseEvent | PointerEvent): number => {
+      const mesh = stateRef.current?.solid;
+      if (!mesh) return -1;
+      raycaster.setFromCamera(canvasNDC(e), stateRef.current!.camera);
+      const hits = raycaster.intersectObject(mesh);
+      const hit = getFrontFaceHit(hits);
+      if (!hit || hit.faceIndex == null) return -1;
+      return hit.faceIndex;
+    };
+
+    const refreshOverlay = () => {
+      const mesh = stateRef.current?.solid;
+      if (!mesh) return;
+      const geo = mesh.geometry;
+      const faces = useStore.getState().excludedFaces;
+
+      // Remove old overlay
+      if (exclusionOverlayMesh) {
+        scene.remove(exclusionOverlayMesh);
+        exclusionOverlayMesh.geometry.dispose();
+        exclusionOverlayMesh = null;
+      }
+
+      if (faces.size === 0) return;
+
+      const overlayGeo = buildExclusionOverlayGeo(geo, faces);
+      exclusionOverlayMesh = new THREE.Mesh(overlayGeo, exclMaterial);
+      exclusionOverlayMesh.renderOrder = 1;
+      // Copy the mesh transform so the overlay aligns perfectly
+      exclusionOverlayMesh.position.copy(mesh.position);
+      exclusionOverlayMesh.quaternion.copy(mesh.quaternion);
+      exclusionOverlayMesh.scale.copy(mesh.scale);
+      exclusionOverlayMesh.updateMatrixWorld();
+      scene.add(exclusionOverlayMesh);
+    };
+
+    state.refreshOverlay = refreshOverlay;
+    state.invalidateAdjacency = () => {
+      adjacencyData = null;
+    };
+
+    const paintAt = (e: MouseEvent | PointerEvent) => {
+      const mesh = stateRef.current?.solid;
+      if (!mesh) return;
+      raycaster.setFromCamera(canvasNDC(e), stateRef.current!.camera);
+      const hits = raycaster.intersectObject(mesh);
+      const hit = getFrontFaceHit(hits);
+      if (!hit || hit.faceIndex == null) return;
+
+      const store = useStore.getState();
+      const erasing = store.eraseMode || store.activeViewportTool === 'erase';
+
+      if (store.brushIsRadius && hit.point && adjacencyData) {
+        // Radius brush: find all triangles whose centroid is within radius
+        const geo = mesh.geometry;
+        const indexAttr = geo.index;
+        const triCount = indexAttr ? indexAttr.count / 3 : geo.attributes.position.count / 3;
+        const localPoint = mesh.worldToLocal(hit.point.clone());
+        const selected = radiusBrushSelect(
+          localPoint,
+          store.brushRadius,
+          adjacencyData.centroids,
+          triCount,
+        );
+        if (erasing) {
+          store.removeExcludedFaces(selected);
+        } else {
+          store.addExcludedFaces(selected);
+        }
+      } else {
+        // Single-face click
+        if (erasing) {
+          store.removeExcludedFaces([hit.faceIndex]);
+        } else {
+          store.addExcludedFaces([hit.faceIndex]);
+        }
+      }
+
+      refreshOverlay();
+    };
+
+    const handlePointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const tool = useStore.getState().activeViewportTool;
+
+      if (tool === 'placeOnFace') {
+        const triIdx = pickTriangle(e);
+        if (triIdx >= 0) {
+          raycaster.setFromCamera(canvasNDC(e), stateRef.current!.camera);
+          const hits = raycaster.intersectObject(stateRef.current!.solid);
+          const hit = getFrontFaceHit(hits);
+          if (hit && hit.face) {
+            const normal = hit.face.normal.clone()
+              .transformDirection(stateRef.current!.solid.matrixWorld);
+            const target = new THREE.Vector3(0, -1, 0);
+            const q = new THREE.Quaternion().setFromUnitVectors(normal, target);
+            stateRef.current!.solid.quaternion.premultiply(q);
+            stateRef.current!.solid.updateMatrixWorld();
+            fitCamera(stateRef.current!);
+            useStore.getState().setActiveViewportTool('select');
+          }
+        }
+        return;
+      }
+
+      if (tool === 'select') {
+        const mesh = stateRef.current?.solid;
+        if (mesh && mesh.geometry && mesh.geometry.getAttribute('position')) {
+          raycaster.setFromCamera(canvasNDC(e), stateRef.current!.camera);
+          const hits = raycaster.intersectObject(mesh);
+          const hit = getFrontFaceHit(hits);
+          if (hit && hit.point) {
+            const localPoint = mesh.worldToLocal(hit.point.clone());
+            const stats = useStore.getState().preview?.stats ?? { maxOuterRadius: 50, minOuterRadius: 40 };
+            const bbox = mesh.geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(mesh.geometry.getAttribute('position') as THREE.BufferAttribute);
+            const clickedPart = getHitPart(localPoint, bbox, stats.maxOuterRadius);
+            
+            const operations = useStore.getState().settings.operations;
+            let op = operations.find((o) => o.targetPart === clickedPart);
+            if (!op) {
+              const newId = `op-${clickedPart}-${Date.now()}`;
+              useStore.getState().addOperation({
+                id: newId,
+                name: `${clickedPart.charAt(0).toUpperCase() + clickedPart.slice(1)} Texture`,
+                type: 'deboss',
+                targetPart: clickedPart,
+                mappingKind: 'grid',
+                visible: true,
+                projectionMode: 'cylindrical',
+                projectionMatrix: [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
+                patternId: 'primary',
+                maskId: null,
+                depth: clickedPart === 'body' ? 1.7 : 0.8,
+                smoothing: 0,
+                tileFit: 'stretch',
+                snapSeamlessWrap: true,
+                columns: clickedPart === 'body' ? 4 : 16,
+                rows: clickedPart === 'body' ? 8 : 2,
+                offsetX: 0,
+                offsetY: 0,
+                scaleX: 1,
+                scaleY: 1,
+                rotation: 0,
+                mirrorX: false,
+                mirrorY: false,
+              });
+              useStore.getState().setSelectedOperationId(newId);
+            } else {
+              if (!op.visible) {
+                useStore.getState().updateOperation(op.id, { visible: true });
+              }
+              useStore.getState().setSelectedOperationId(op.id);
+            }
+          }
+        }
+        return;
+      }
+
+      if (tool === 'brush' || tool === 'erase' || tool === 'bucket') {
+        // Ensure adjacency is built for current geometry
+        if (!adjacencyData && stateRef.current) {
+          adjacencyData = buildAdjacency(stateRef.current.solid.geometry);
+        }
+
+        if (tool === 'bucket') {
+          const triIdx = pickTriangle(e);
+          if (triIdx >= 0 && adjacencyData) {
+            e.preventDefault();
+            e.stopPropagation();
+            const store = useStore.getState();
+            const erasing = store.eraseMode;
+            const filled = bucketFill(triIdx, adjacencyData.adjacency, store.bucketThreshold);
+            if (erasing) {
+              store.removeExcludedFaces(filled);
+            } else {
+              store.addExcludedFaces(filled);
+            }
+            refreshOverlay();
+          }
+        } else {
+          // Brush / erase: only start painting if we hit the mesh
+          const triIdx = pickTriangle(e);
+          if (triIdx < 0) return;  // miss → let OrbitControls handle the drag
+          e.preventDefault();
+          e.stopPropagation();
+          controls.enabled = false;
+          isPainting = true;
+          paintAt(e);
+        }
+      }
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const store = useStore.getState();
+      const tool = store.activeViewportTool;
+
+      if (tool === 'select') {
+        const mesh = stateRef.current?.solid;
+        if (mesh && mesh.geometry && mesh.geometry.getAttribute('position')) {
+          raycaster.setFromCamera(canvasNDC(e), stateRef.current!.camera);
+          const hits = raycaster.intersectObject(mesh, false);
+          const hit = getFrontFaceHit(hits);
+          renderer.domElement.style.cursor = hit && hit.point ? 'pointer' : 'default';
+        }
+      }
+      
+      if ((tool === 'brush' || tool === 'erase') && store.brushIsRadius) {
+        const mesh = stateRef.current?.solid;
+        if (mesh) {
+          raycaster.setFromCamera(canvasNDC(e), stateRef.current!.camera);
+          const hits = raycaster.intersectObject(mesh, false);
+          const hit = getFrontFaceHit(hits);
+          if (hit && hit.face) {
+            brushCursor.visible = true;
+            brushCursor.position.copy(hit.point);
+            const normalMatrix = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
+            const worldNormal = hit.face.normal.clone().applyMatrix3(normalMatrix).normalize();
+            const targetQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), worldNormal);
+            brushCursor.quaternion.copy(targetQuat);
+            brushCursor.scale.setScalar(store.brushRadius);
+          } else {
+            brushCursor.visible = false;
+          }
+        }
+      } else {
+        brushCursor.visible = false;
+      }
+      
+      if (!isPainting) return;
+      
+      if (tool === 'brush' || tool === 'erase') {
+        paintAt(e);
+      }
+    };
+
+    const handlePointerUp = async (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      if (isPainting) {
+        isPainting = false;
+        controls.enabled = true;
+        
+        // Persist the mask to the active operation
+        const store = useStore.getState();
+        const { selectedOperationId, excludedFaces } = store;
+        const mesh = stateRef.current?.solid;
+        
+        if (selectedOperationId && mesh) {
+          const geo = mesh.geometry;
+          const indexAttr = geo.index;
+          const triCount = indexAttr ? indexAttr.count / 3 : geo.attributes.position.count / 3;
+          
+          const maskArray = new Uint8Array(triCount);
+          for (const face of excludedFaces) maskArray[face] = 1;
+          
+          const { saveMask } = await import('../state/persistence');
+          const maskId = crypto.randomUUID();
+          await saveMask(maskId, maskArray);
+          
+          // Update the operation with the new maskId
+          store.updateOperation(selectedOperationId, { maskId });
+        }
+      }
+    };
+
+    // Shift key toggles erase mode (like Bumpmesh)
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') {
+        const tool = useStore.getState().activeViewportTool;
+        if (tool === 'brush' || tool === 'bucket') {
+          useStore.getState().setEraseMode(true);
+        }
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') {
+        useStore.getState().setEraseMode(false);
+      }
+    };
+
+    renderer.domElement.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keyup', handleKeyUp);
+
     return () => {
       state.disposed = true;
       cancelAnimationFrame(frame);
       observer.disconnect();
       controls.dispose();
+      renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keyup', handleKeyUp);
+      
+      scene.remove(brushCursor);
+      brushCursorGeo.dispose();
+      brushCursorMat.dispose();
+
+      if (exclusionOverlayMesh) {
+        scene.remove(exclusionOverlayMesh);
+        exclusionOverlayMesh.geometry.dispose();
+      }
+      exclMaterial.dispose();
       solid.geometry.dispose();
       wire.geometry.dispose();
       for (const material of Object.values(materials)) material.dispose();
@@ -223,7 +598,6 @@ export function Viewport({ onReady, onFps, onError }: ViewportProps) {
       state.wire.position.y = 0;
     } else {
       const geometry = toBufferGeometry(preview.mesh);
-      addReliefColours(geometry, preview.stats);
       state.solid.geometry = geometry;
 
       // Position the model so its lowest point sits on the floor grid (Y = 0)
@@ -251,7 +625,18 @@ export function Viewport({ onReady, onFps, onError }: ViewportProps) {
 
     previous.dispose();
     previousWire.dispose();
+
+    state.invalidateAdjacency?.();
+    state.refreshOverlay?.();
   }, [preview]);
+
+  /* -- Sync mask overlay on external updates (Clear / Invert / Operation switch) -- */
+  const maskVersion = useStore((s) => s.maskVersion);
+  const excludedFaces = useStore((s) => s.excludedFaces);
+
+  useEffect(() => {
+    stateRef.current?.refreshOverlay?.();
+  }, [maskVersion, excludedFaces]);
 
   /* -- View mode -------------------------------------------------------- */
   useEffect(() => {
@@ -261,8 +646,42 @@ export function Viewport({ onReady, onFps, onError }: ViewportProps) {
     state.wire.visible = viewMode === 'wireframe';
   }, [viewMode]);
 
+
+
   return <div ref={containerRef} className="viewport" />;
 }
+
+export function getHitPart(
+  localPoint: THREE.Vector3,
+  bb: THREE.Box3,
+  maxOuterRadius: number,
+): TankardPartId {
+  const yMin = bb.min.y;
+  const yMax = bb.max.y;
+  const radius = maxOuterRadius > 0 ? maxOuterRadius : 50;
+
+  // 1. Handle: extends out along +X from the cylinder body
+  if (localPoint.x > radius * 0.98 + 0.5) {
+    return 'handle';
+  }
+
+  // 2. Top Rim: top ring of the mug (within 14 mm of top)
+  if (localPoint.y > yMax - 14) {
+    return 'topRim';
+  }
+
+  // 3. Bottom Rim: bottom ring of the mug (within 16 mm of bottom)
+  if (localPoint.y < yMin + 16) {
+    return 'bottomRim';
+  }
+
+  // 4. Body Wall: central cylinder wall
+  return 'body';
+}
+
+
+
+
 
 /* -------------------------------------------------------------------- *
  * Helpers
@@ -282,37 +701,7 @@ function toBufferGeometry(mesh: PrintableMesh): THREE.BufferGeometry {
   return geometry;
 }
 
-/**
- * Per-vertex colours used by the mask and heatmap view modes: radius is mapped
- * across the relief range, so a carved floor reads dark/blue and an untouched
- * surface reads light/red. Debug aid, never part of the exported geometry.
- */
-function addReliefColours(
-  geometry: THREE.BufferGeometry,
-  stats: { minOuterRadius: number; maxOuterRadius: number },
-): void {
-  const position = geometry.getAttribute('position');
-  const count = position.count;
-  const colours = new Float32Array(count * 3);
-  const lo = stats.minOuterRadius;
-  const hi = Math.max(stats.maxOuterRadius, lo + 1e-6);
 
-  for (let i = 0; i < count; i++) {
-    const x = position.getX(i);
-    const z = position.getZ(i);
-    const t = Math.min(1, Math.max(0, (Math.hypot(x, z) - lo) / (hi - lo)));
-    colours[i * 3] = t;
-    colours[i * 3 + 1] = 0.25 + t * 0.4;
-    colours[i * 3 + 2] = 1 - t;
-  }
-  geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
-}
-
-interface SceneState {
-  camera: THREE.PerspectiveCamera;
-  controls: OrbitControls;
-  solid: THREE.Mesh;
-}
 
 function modelRadius(state: SceneState): number {
   const sphere = state.solid.geometry.boundingSphere;

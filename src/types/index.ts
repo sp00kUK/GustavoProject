@@ -8,7 +8,7 @@
  * inside the geometry kernel.
  */
 
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.2.0';
 
 /* ------------------------------------------------------------------ *
  * Cylinder
@@ -37,6 +37,36 @@ export type TileFit = 'stretch' | 'fit' | 'fill';
 /** Which rows receive the stagger offset. */
 export type StaggerMode = 'none' | 'alternate' | 'every';
 
+export interface RowAdjustment {
+  patternId?: string | null;
+  rotation?: number;
+  scaleX?: number;
+  scaleY?: number;
+  offsetX?: number;
+  offsetY?: number;
+  mirrorX?: boolean;
+  mirrorY?: boolean;
+  brightness?: number;
+  contrast?: number;
+  gamma?: number;
+  blackPoint?: number;
+  whitePoint?: number;
+  blur?: number;
+  quantize?: number;
+  invert?: boolean;
+}
+
+export interface PatternAdjustment {
+  brightness?: number;
+  contrast?: number;
+  gamma?: number;
+  blackPoint?: number;
+  whitePoint?: number;
+  blur?: number;
+  quantize?: number;
+  invert?: boolean;
+}
+
 export interface PatternSettings {
   mode: PatternMode;
 
@@ -60,6 +90,12 @@ export interface PatternSettings {
   /** Quantise the mask into N steps. 0 = off. */
   quantize: number;
 
+  /** Per-pattern isolated adjustments so modifying one logo doesn't affect others. */
+  patternAdjustments?: Record<string, PatternAdjustment>;
+
+  /** Per-row isolated adjustments (rotation, offsets, scale, blur, black/white points, invert). */
+  rowAdjustments?: Record<number, RowAdjustment>;
+
   /** How the source image maps into one tile. */
   tileFit: TileFit;
 
@@ -67,6 +103,13 @@ export interface PatternSettings {
   columns: number;
   /** Repeats up the height (within the usable, un-margined band). */
   rows: number;
+
+  /**
+   * Optional artwork override for each physical row. `null` means the primary
+   * pattern; a string is the stable id of an artwork in the row-design
+   * library. Missing entries also fall back to the primary pattern.
+   */
+  rowPatternIds: Array<string | null>;
 
   /** Tile-local transforms. */
   offsetX: number; // 0..1 of one tile
@@ -80,6 +123,50 @@ export interface PatternSettings {
   /** Brick-style row shift, 0..1 of one tile width. */
   stagger: number;
   staggerMode: StaggerMode;
+}
+
+/* ------------------------------------------------------------------ *
+ * Multi-part mold assembly
+ * ------------------------------------------------------------------ */
+
+export type ProjectionTarget = 'body' | 'handle' | 'both';
+export type HandleFont = 'modern' | 'bold' | 'classic';
+
+/**
+ * A handle is deliberately emitted as a separate closed shell. It is placed
+ * beside the cylindrical body for an assembled preview, but is never welded
+ * or boolean-unioned into the body mesh.
+ */
+export interface MoldAssemblySettings {
+  enabled: boolean;
+  projectionTarget: ProjectionTarget;
+  /** Radial reach from the body to the outer edge of the handle, mm. */
+  handleExtension: number;
+  /** Width of the U-shaped handle bar in its X/Y plane, mm. */
+  handleBarWidth: number;
+  /** Handle extrusion thickness along Z, mm. */
+  handleDepth: number;
+  /** Printable separation between body and handle in the assembled preview. */
+  partGap: number;
+}
+
+export interface HandleNameSettings {
+  enabled: boolean;
+  text: string;
+  font: HandleFont;
+  /** Raised lettering depth, mm. */
+  depth: number;
+}
+
+/** Independent bottom stamp/logo insert. It is never fused into the body. */
+export interface BottomLogoSettings {
+  enabled: boolean;
+  diameter: number;
+  plateThickness: number;
+  reliefDepth: number;
+  invert: boolean;
+  /** Visual separation from the body in the assembled preview, mm. */
+  previewGap: number;
 }
 
 /* ------------------------------------------------------------------ *
@@ -125,6 +212,7 @@ export interface QualitySettings {
  * ------------------------------------------------------------------ */
 
 export type ExportFormat = 'stl' | '3mf';
+export type ExportScope = 'assembly' | 'body' | 'handle' | 'bottomLogo';
 
 /**
  * Orientation of the cylinder axis in the *exported* file.
@@ -139,17 +227,114 @@ export type ExportOrientation = 'vertical' | 'horizontalX' | 'horizontalY';
 export interface ExportSettings {
   format: ExportFormat;
   orientation: ExportOrientation;
+  scope: ExportScope;
 }
 
 /* ------------------------------------------------------------------ *
  * Project
  * ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ *
+ * Base Mesh
+ * ------------------------------------------------------------------ */
+
+export type BaseMeshType = 'cylinder' | 'imported';
+
+export interface ImportedMeshSettings {
+  type: 'imported';
+  meshId: string; // References a stored mesh
+  filename: string;
+  orientationMatrix: number[]; // 16-element Float32Array representation
+}
+
+export interface ParametricCylinderSettings extends CylinderSettings {
+  type: 'cylinder';
+}
+
+export type BaseMeshSettings = ParametricCylinderSettings | ImportedMeshSettings;
+
+/* ------------------------------------------------------------------ *
+ * Operation Stack
+ * ------------------------------------------------------------------ */
+
+export type ProjectionMode = 'triplanar' | 'cubic' | 'cylindrical' | 'spherical' | 'planar_xy' | 'planar_xz' | 'planar_yz' | 'planar';
+export type OperationType = 'deboss' | 'emboss' | 'displace';
+export type OperationTargetPart = 'all' | 'body' | 'topRim' | 'bottomRim' | 'handle' | 'bottomLogo' | 'custom';
+export type OperationMappingKind = 'grid' | 'logo';
+
+export interface OperationSettings {
+  id: string;
+  name: string;
+  type: OperationType;
+  targetPart: OperationTargetPart;
+  mappingKind: OperationMappingKind;
+  visible: boolean;
+  
+  projectionMode: ProjectionMode;
+  projectionMatrix: number[]; // 16-element transform matrix
+  
+  patternId: string | null;
+  maskId: string | null; // References a selection mask
+  
+  depth: number;
+  invert?: boolean;
+  smoothing?: number;
+  
+  // Mapping constraints (replaces some of PatternSettings)
+  tileFit: TileFit;
+  snapSeamlessWrap: boolean;
+  columns: number;
+  rows: number;
+  rowPatternIds?: Array<string | null>;
+  rowAdjustments?: Record<number, RowAdjustment>;
+  patternAdjustments?: Record<string, PatternAdjustment>;
+  offsetX: number;
+  offsetY: number;
+  scaleX: number;
+  scaleY: number;
+  rotation: number;
+  mirrorX: boolean;
+  mirrorY: boolean;
+}
+
+/* ------------------------------------------------------------------ *
+ * CAD UI Workspace & Navigation Types
+ * ------------------------------------------------------------------ */
+
+export type NavTab = 'project' | 'model' | 'pattern' | 'operations' | 'export';
+export type OperationEditorTab = 'settings' | 'texture' | 'layout' | 'mask' | 'transform';
+export type ViewportTool =
+  | 'select'
+  | 'pan'
+  | 'orbit'
+  | 'move'
+  | 'scale'
+  | 'placeOnFace'
+  | 'fit'
+  | 'brush'
+  | 'bucket'
+  | 'erase'
+  | 'smooth';
+export type CameraMode = 'perspective' | 'orthographic';
+export interface SnapSettings {
+  grid: boolean;
+  angle: boolean;
+  seam: boolean;
+  axis: boolean;
+}
 
 export interface ProjectSettings {
   name: string;
+  baseMesh: BaseMeshSettings;
+  operations: OperationSettings[];
+  
+  // Legacy fields kept for backward compatibility during migration
   cylinder: CylinderSettings;
   pattern: PatternSettings;
   relief: ReliefSettings;
+  
+  assembly: MoldAssemblySettings;
+  handleName: HandleNameSettings;
+  bottomLogo: BottomLogoSettings;
   quality: QualitySettings;
   export: ExportSettings;
 }
@@ -188,6 +373,15 @@ export interface PrintableMesh {
   indices: Uint32Array;
   /** Optional smooth/creased normals for display. Never required for export. */
   normals?: Float32Array;
+}
+
+export type PrintablePartId = 'body' | 'handle' | 'bottomLogo';
+
+/** A separately printable object in the assembled model. */
+export interface PrintablePart {
+  id: PrintablePartId;
+  name: string;
+  mesh: PrintableMesh;
 }
 
 export interface MeshStats {

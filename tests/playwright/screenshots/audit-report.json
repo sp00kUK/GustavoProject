@@ -1,0 +1,54 @@
+{
+  "issues": [
+    {
+      "selector": "input[type=\"range\"]:nth(1)",
+      "issue": "Slider \"_r_1c_\" invisible or collapsed",
+      "severity": "high",
+      "details": "no box"
+    },
+    {
+      "selector": "input[type=\"range\"]:nth(2)",
+      "issue": "Slider \"_r_1e_\" invisible or collapsed",
+      "severity": "high",
+      "details": "no box"
+    },
+    {
+      "selector": "input[type=\"range\"]:nth(3)",
+      "issue": "Slider \"_r_1g_\" invisible or collapsed",
+      "severity": "high",
+      "details": "no box"
+    },
+    {
+      "selector": "input[type=\"range\"]:nth(4)",
+      "issue": "Slider \"_r_1i_\" invisible or collapsed",
+      "severity": "high",
+      "details": "no box"
+    },
+    {
+      "selector": "input[type=\"range\"]:nth(5)",
+      "issue": "Slider \"_r_1k_\" invisible or collapsed",
+      "severity": "high",
+      "details": "no box"
+    },
+    {
+      "selector": "input[type=\"range\"]:nth(6)",
+      "issue": "Slider \"_r_1m_\" invisible or collapsed",
+      "severity": "high",
+      "details": "no box"
+    },
+    {
+      "selector": "input[type=\"range\"]:nth(7)",
+      "issue": "Slider \"_r_1o_\" invisible or collapsed",
+      "severity": "high",
+      "details": "no box"
+    },
+    {
+      "selector": "[console]",
+      "issue": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "severity": "high"
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

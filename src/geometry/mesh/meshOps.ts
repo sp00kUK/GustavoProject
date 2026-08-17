@@ -1,4 +1,9 @@
-import type { ExportOrientation, MeshStats, PrintableMesh } from '../../types';
+import type {
+  ExportOrientation,
+  MeshStats,
+  PrintableMesh,
+  PrintablePart,
+} from '../../types';
 import { DEGENERATE_AREA_EPSILON } from '../constants';
 
 /** Bounding box, signed volume, surface area and radial extents. */
@@ -178,6 +183,29 @@ export type Orientation = ExportOrientation;
  * where a slicer expects to find the bed.
  */
 export function orientMesh(mesh: PrintableMesh, orientation: Orientation): PrintableMesh {
+  const transformed = rotateForExport(mesh, orientation);
+  translateMeshesToBed([transformed]);
+  return transformed;
+}
+
+/**
+ * Orient every independently printable object with one shared bed offset.
+ * Unlike calling `orientMesh` repeatedly, this preserves the assembled
+ * relationship between body, handle and bottom insert in a 3MF package.
+ */
+export function orientPartsTogether(
+  parts: PrintablePart[],
+  orientation: Orientation,
+): PrintablePart[] {
+  const oriented = parts.map((part) => ({
+    ...part,
+    mesh: rotateForExport(part.mesh, orientation),
+  }));
+  translateMeshesToBed(oriented.map((part) => part.mesh));
+  return oriented;
+}
+
+function rotateForExport(mesh: PrintableMesh, orientation: Orientation): PrintableMesh {
   const src = mesh.positions;
   const out = new Float32Array(src.length);
 
@@ -204,11 +232,42 @@ export function orientMesh(mesh: PrintableMesh, orientation: Orientation): Print
     }
   }
 
+  return { positions: out, indices: mesh.indices };
+}
+
+function translateMeshesToBed(meshes: PrintableMesh[]): void {
   let minZ = Infinity;
-  for (let i = 2; i < out.length; i += 3) if (out[i] < minZ) minZ = out[i];
-  if (Number.isFinite(minZ) && minZ !== 0) {
-    for (let i = 2; i < out.length; i += 3) out[i] -= minZ;
+  for (const mesh of meshes) {
+    for (let i = 2; i < mesh.positions.length; i += 3) {
+      if (mesh.positions[i] < minZ) minZ = mesh.positions[i];
+    }
+  }
+  if (!Number.isFinite(minZ) || minZ === 0) return;
+  for (const mesh of meshes) {
+    for (let i = 2; i < mesh.positions.length; i += 3) mesh.positions[i] -= minZ;
+  }
+}
+
+/** Concatenate closed shells without welding or boolean-unioning them. */
+export function mergeMeshes(meshes: PrintableMesh[]): PrintableMesh {
+  const valid = meshes.filter((mesh) => mesh.positions.length > 0 && mesh.indices.length > 0);
+  const vertexCount = valid.reduce((sum, mesh) => sum + mesh.positions.length / 3, 0);
+  const indexCount = valid.reduce((sum, mesh) => sum + mesh.indices.length, 0);
+  const positions = new Float32Array(vertexCount * 3);
+  const indices = new Uint32Array(indexCount);
+  let positionOffset = 0;
+  let indexOffset = 0;
+  let vertexOffset = 0;
+
+  for (const mesh of valid) {
+    positions.set(mesh.positions, positionOffset);
+    for (let i = 0; i < mesh.indices.length; i++) {
+      indices[indexOffset + i] = mesh.indices[i] + vertexOffset;
+    }
+    positionOffset += mesh.positions.length;
+    indexOffset += mesh.indices.length;
+    vertexOffset += mesh.positions.length / 3;
   }
 
-  return { positions: out, indices: mesh.indices };
+  return { positions, indices };
 }

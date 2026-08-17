@@ -1,4 +1,4 @@
-import type { PrintableMesh } from '../types';
+import type { PrintableMesh, PrintablePart } from '../types';
 import { APP_VERSION } from '../types';
 import type { ExportContext, MeshExporter } from './types';
 import { createZip, type Bytes } from './zip';
@@ -21,7 +21,12 @@ export class ThreeMFExporter implements MeshExporter {
   readonly mimeType = 'model/3mf';
 
   async export(mesh: PrintableMesh, context: ExportContext): Promise<Blob> {
-    const model = buildModelXml(mesh, context);
+    return this.exportParts([{ id: 'body', name: 'Body', mesh }], context);
+  }
+
+  /** Emit each part as its own 3MF object while preserving assembly position. */
+  async exportParts(parts: PrintablePart[], context: ExportContext): Promise<Blob> {
+    const model = buildModelXml(parts, context);
     const encoder = new TextEncoder();
 
     return createZip([
@@ -32,12 +37,13 @@ export class ThreeMFExporter implements MeshExporter {
   }
 }
 
-function buildModelXml(mesh: PrintableMesh, context: ExportContext): Bytes[] {
-  const { positions, indices } = mesh;
+function buildModelXml(parts: PrintablePart[], context: ExportContext): Bytes[] {
   const encoder = new TextEncoder();
   const chunks: Bytes[] = [];
-  const vertexCount = positions.length / 3;
-  const triangleCount = indices.length / 3;
+  const totalVertices = parts.reduce((sum, part) => sum + part.mesh.positions.length / 3, 0);
+  const totalTriangles = parts.reduce((sum, part) => sum + part.mesh.indices.length / 3, 0);
+  let writtenVertices = 0;
+  let writtenTriangles = 0;
 
   const { settings } = context;
   const meta = [
@@ -61,51 +67,67 @@ function buildModelXml(mesh: PrintableMesh, context: ExportContext): Bytes[] {
         `<model unit="millimeter" xml:lang="en-US" ` +
         `xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">\n` +
         `${meta}\n` +
-        ` <resources>\n  <object id="1" type="model">\n   <mesh>\n    <vertices>\n`,
+        ` <resources>\n`,
     ),
   );
 
   // Streamed in blocks so a multi-million triangle model never materialises as
   // one enormous JavaScript string.
   const BLOCK = 8192;
-  let buf: string[] = [];
-
-  for (let v = 0; v < vertexCount; v++) {
-    buf.push(
-      `     <vertex x="${num(positions[v * 3])}" y="${num(positions[v * 3 + 1])}" z="${num(
-        positions[v * 3 + 2],
-      )}"/>\n`,
+  for (let partIndex = 0; partIndex < parts.length; partIndex++) {
+    const part = parts[partIndex];
+    const { positions, indices } = part.mesh;
+    const vertexCount = positions.length / 3;
+    const triangleCount = indices.length / 3;
+    chunks.push(
+      encoder.encode(
+        `  <object id="${partIndex + 1}" type="model" name="${esc(part.name)}">\n` +
+          `   <mesh>\n    <vertices>\n`,
+      ),
     );
-    if (buf.length >= BLOCK) {
-      chunks.push(encoder.encode(buf.join('')));
-      buf = [];
-      context.onProgress?.((v / vertexCount) * 0.4);
-      if (context.shouldCancel?.()) throw new Error('Export cancelled');
+    let buf: string[] = [];
+    for (let v = 0; v < vertexCount; v++) {
+      buf.push(
+        `     <vertex x="${num(positions[v * 3])}" y="${num(positions[v * 3 + 1])}" z="${num(
+          positions[v * 3 + 2],
+        )}"/>\n`,
+      );
+      if (buf.length >= BLOCK) {
+        chunks.push(encoder.encode(buf.join('')));
+        buf = [];
+        context.onProgress?.(((writtenVertices + v) / Math.max(1, totalVertices)) * 0.4);
+        if (context.shouldCancel?.()) throw new Error('Export cancelled');
+      }
     }
-  }
-  chunks.push(encoder.encode(buf.join('') + `    </vertices>\n    <triangles>\n`));
-  buf = [];
-
-  for (let t = 0; t < triangleCount; t++) {
-    buf.push(
-      `     <triangle v1="${indices[t * 3]}" v2="${indices[t * 3 + 1]}" v3="${
-        indices[t * 3 + 2]
-      }"/>\n`,
+    writtenVertices += vertexCount;
+    chunks.push(encoder.encode(buf.join('') + `    </vertices>\n    <triangles>\n`));
+    buf = [];
+    for (let t = 0; t < triangleCount; t++) {
+      buf.push(
+        `     <triangle v1="${indices[t * 3]}" v2="${indices[t * 3 + 1]}" v3="${
+          indices[t * 3 + 2]
+        }"/>\n`,
+      );
+      if (buf.length >= BLOCK) {
+        chunks.push(encoder.encode(buf.join('')));
+        buf = [];
+        context.onProgress?.(
+          0.4 + ((writtenTriangles + t) / Math.max(1, totalTriangles)) * 0.5,
+        );
+        if (context.shouldCancel?.()) throw new Error('Export cancelled');
+      }
+    }
+    writtenTriangles += triangleCount;
+    chunks.push(
+      encoder.encode(buf.join('') + `    </triangles>\n   </mesh>\n  </object>\n`),
     );
-    if (buf.length >= BLOCK) {
-      chunks.push(encoder.encode(buf.join('')));
-      buf = [];
-      context.onProgress?.(0.4 + (t / triangleCount) * 0.5);
-      if (context.shouldCancel?.()) throw new Error('Export cancelled');
-    }
   }
 
+  const build = parts
+    .map((_, index) => `  <item objectid="${index + 1}"/>`)
+    .join('\n');
   chunks.push(
-    encoder.encode(
-      buf.join('') +
-        `    </triangles>\n   </mesh>\n  </object>\n </resources>\n` +
-        ` <build>\n  <item objectid="1"/>\n </build>\n</model>\n`,
-    ),
+    encoder.encode(` </resources>\n <build>\n${build}\n </build>\n</model>\n`),
   );
 
   context.onProgress?.(0.95);

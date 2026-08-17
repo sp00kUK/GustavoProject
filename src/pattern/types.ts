@@ -20,9 +20,10 @@ export interface RawPattern {
   originalWidth: number;
   originalHeight: number;
   /**
-   * Original uploaded file bytes. Kept so Vector Magic Desktop receives the
-   * real source artwork instead of a grayscale reconstruction. Procedural
-   * patterns do not have an original file and leave these fields undefined.
+   * Original uploaded file bytes. Kept so the local open-source vectorizer
+   * receives the real source artwork instead of a grayscale reconstruction.
+   * Procedural patterns do not have an original file and leave these fields
+   * undefined.
    */
   sourceBytes?: Uint8Array;
   sourceMimeType?: string;

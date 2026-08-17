@@ -40,34 +40,39 @@ export function createPatternSampler(
   settings: PatternSettings,
   options: SamplerOptions,
 ): PatternSampler {
-  const { width, height, mask, binary } = processed;
+  return createRowPatternSampler(
+    new Map([['primary', processed]]),
+    'primary',
+    settings,
+    options,
+  );
+}
+
+/**
+ * Build one cylindrical sampler whose source can change at exact tile-row
+ * boundaries. Transform, stagger and seam semantics remain identical to the
+ * single-artwork sampler; only the source mask selected for a row changes.
+ */
+export function createRowPatternSampler(
+  processedById: ReadonlyMap<string, ProcessedPattern>,
+  primaryId: string,
+  settings: PatternSettings,
+  options: SamplerOptions,
+): PatternSampler {
   const columns = Math.max(1, settings.columns);
   const rows = Math.max(1, settings.rows);
 
-  const rot = (settings.rotation * Math.PI) / 180;
-  const cosR = Math.cos(rot);
-  const sinR = Math.sin(rot);
-  const sx = settings.scaleX === 0 ? EPS : settings.scaleX;
-  const sy = settings.scaleY === 0 ? EPS : settings.scaleY;
-
-  // Tile fit: how much of one tile the source image spans on each axis.
-  const imgAspect = width / height;
   const tileAspect =
-    options.tileHeightMm > 0 ? options.tileWidthMm / options.tileHeightMm : imgAspect;
-  let fx = 1;
-  let fy = 1;
-  if (settings.tileFit === 'fit') {
-    if (imgAspect > tileAspect) fy = tileAspect / imgAspect;
-    else fx = imgAspect / tileAspect;
-  } else if (settings.tileFit === 'fill') {
-    if (imgAspect > tileAspect) fx = imgAspect / tileAspect;
-    else fy = tileAspect / imgAspect;
+    options.tileHeightMm > 0 ? options.tileWidthMm / options.tileHeightMm : 1;
+  const sources = new Map<string, PreparedSource>();
+  for (const [id, processed] of processedById) {
+    sources.set(id, prepareSource(processed, settings.tileFit, tileAspect));
   }
+  const primary = sources.get(primaryId) ?? sources.values().next().value;
+  if (!primary) return { sample: () => 0 };
+
   const clipOutsideTile = settings.tileFit === 'fit';
-
   const staggerActive = settings.staggerMode !== 'none' && settings.stagger !== 0;
-
-  const sample = binary ? sampleNearest : sampleBilinear;
 
   return {
     sample(u: number, v: number, atTopEdge?: boolean): number {
@@ -75,17 +80,42 @@ export function createPatternSampler(
       let tu = u * columns;
       const tv = v * rows;
 
+      const rowIndex = Math.max(
+        0,
+        Math.min(rows - 1, Math.floor(tv - (atTopEdge ? EPS : 0))),
+      );
+      const requestedId = settings.rowPatternIds?.[rowIndex];
+      const source =
+        sources.get(`row_${rowIndex}`) ??
+        (requestedId ? sources.get(requestedId) : undefined) ??
+        primary;
+
+      const rowAdj = settings.rowAdjustments?.[rowIndex];
+
+      // Per-row transforms
+      const rowRotDeg = rowAdj?.rotation !== undefined ? rowAdj.rotation : settings.rotation;
+      const rowRot = (rowRotDeg * Math.PI) / 180;
+      const rowCosR = rowRot !== 0 ? Math.cos(rowRot) : 1;
+      const rowSinR = rowRot !== 0 ? Math.sin(rowRot) : 0;
+
+      const rowScaleX = rowAdj?.scaleX !== undefined ? rowAdj.scaleX : settings.scaleX;
+      const rowScaleY = rowAdj?.scaleY !== undefined ? rowAdj.scaleY : settings.scaleY;
+      const rowSx = rowScaleX === 0 ? EPS : rowScaleX;
+      const rowSy = rowScaleY === 0 ? EPS : rowScaleY;
+
+      const rowOffsetX = rowAdj?.offsetX !== undefined ? rowAdj.offsetX : settings.offsetX;
+      const rowOffsetY = rowAdj?.offsetY !== undefined ? rowAdj.offsetY : settings.offsetY;
+
+      const rowMirrorX = rowAdj?.mirrorX !== undefined ? rowAdj.mirrorX : settings.mirrorX;
+      const rowMirrorY = rowAdj?.mirrorY !== undefined ? rowAdj.mirrorY : settings.mirrorY;
+
       // 3. stagger - applied on whole tile rows, so brickwork stays periodic
-      //    and the 0/360 seam stays closed.
       if (staggerActive) {
-        const rowIndex = Math.floor(tv - (atTopEdge ? EPS : 0));
         const k = settings.staggerMode === 'alternate' ? rowIndex & 1 : rowIndex;
         tu += settings.stagger * k;
       }
 
-      // 4. tile-local. At the very top of the roller `fract` would wrap back to
-      //    the *start* of the pattern; atTopEdge asks for the end of the last
-      //    tile instead so the top ring matches the tile below it.
+      // 4. tile-local
       let pu = tu - Math.floor(tu);
       let pv = atTopEdge ? 1 : tv - Math.floor(tv);
 
@@ -93,39 +123,83 @@ export function createPatternSampler(
       let cu = pu - 0.5;
       let cv = pv - 0.5;
 
-      cu /= sx;
-      cv /= sy;
+      cu /= rowSx;
+      cv /= rowSy;
 
-      if (rot !== 0) {
-        const ru = cu * cosR - cv * sinR;
-        const rv = cu * sinR + cv * cosR;
+      if (rowRot !== 0) {
+        const ru = cu * rowCosR - cv * rowSinR;
+        const rv = cu * rowSinR + cv * rowCosR;
         cu = ru;
         cv = rv;
       }
 
-      cu += settings.offsetX;
-      cv += settings.offsetY;
+      cu += rowOffsetX;
+      cv += rowOffsetY;
 
-      if (settings.mirrorX) cu = -cu;
-      if (settings.mirrorY) cv = -cv;
+      if (rowMirrorX) cu = -cu;
+      if (rowMirrorY) cv = -cv;
 
       // 9. tile fit
-      cu /= fx;
-      cv /= fy;
+      cu /= source.fx;
+      cv /= source.fy;
 
       pu = cu + 0.5;
       pv = cv + 0.5;
 
       if (clipOutsideTile && (pu < 0 || pu > 1 || pv < 0 || pv > 1)) return 0;
 
-      // 10. sample. On the topmost vertex ring the vertical axis clamps
-      //     instead of wrapping, so the last ring reads the END of the final
-      //     tile. Without this, `fract` sends it back to the START of the
-      //     pattern and any artwork whose top and bottom edges differ shows a
-      //     sudden jump in the last row of geometry.
-      return sample(mask, width, height, pu, pv, atTopEdge === true);
+      // 10. sample
+      return source.sample(
+        source.processed.mask,
+        source.processed.width,
+        source.processed.height,
+        pu,
+        pv,
+        atTopEdge === true,
+      );
     },
   };
+}
+
+interface PreparedSource {
+  processed: ProcessedPattern;
+  fx: number;
+  fy: number;
+  sample: typeof sampleNearest;
+}
+
+function prepareSource(
+  processed: ProcessedPattern,
+  tileFit: PatternSettings['tileFit'],
+  tileAspect: number,
+): PreparedSource {
+  const imgAspect = processed.width / processed.height;
+  let fx = 1;
+  let fy = 1;
+  if (tileFit === 'fit') {
+    if (imgAspect > tileAspect) fy = tileAspect / imgAspect;
+    else fx = imgAspect / tileAspect;
+  } else if (tileFit === 'fill') {
+    if (imgAspect > tileAspect) fx = imgAspect / tileAspect;
+    else fy = tileAspect / imgAspect;
+  }
+  return {
+    processed,
+    fx,
+    fy,
+    sample: processed.binary ? sampleNearest : sampleBilinear,
+  };
+}
+
+/** Sample an already-processed image in square UV space. */
+export function sampleProcessedPattern(
+  processed: ProcessedPattern,
+  u: number,
+  v: number,
+  clampV = true,
+): number {
+  const sample = processed.binary ? sampleNearest : sampleBilinear;
+  return sample(processed.mask, processed.width, processed.height, u, v, clampV);
 }
 
 /**

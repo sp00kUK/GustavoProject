@@ -1,0 +1,1537 @@
+
+Earlier messages are available — press ctrl + t to view the full transcript
+     23 -export const REPOSITORY_VECTOR_MAGIC_EXECUTABLE = fileURLToPath(
+     24 -  new URL('../vendor/vector-magic/vmde.exe', import.meta.url),
+     25 -);
+     26 -
+     27 -const MIME_EXTENSIONS: Record<string, string> = {
+     28 -  'image/png': '.png',
+     29 -  'image/jpeg': '.jpg',
+     30 -  'image/bmp': '.bmp',
+     31 -  'image/gif': '.gif',
+     32 -  'image/tiff': '.tif',
+     33 -};
+     34 -
+     35 -interface VectorMagicSession {
+     36 -  directory: string;
+     37 -  expectedOutputPath: string;
+     38 -  inputPath: string;
+     39 -  statusPath: string;
+     40 -  cancelPath: string;
+     41 -  automationProcess: ChildProcess;
+     42 -  lastStatus: VectorMagicAutomationStatus;
+     43 -}
+     44 -
+     45 -export type VectorMagicAutomationState =
+     46 -  | 'launching'
+     47 -  | 'tracing'
+     48 -  | 'reviewing'
+     49 -  | 'exporting'
+     50 -  | 'complete'
+     51 -  | 'cancelled'
+     52 -  | 'error';
+     53 -
+     54 -export interface VectorMagicAutomationStatus {
+     55 -  state: VectorMagicAutomationState;
+     56 -  progress: number;
+     57 -  error?: string;
+     58 -  updatedAt?: string;
+     59 -}
+     60 -
+     61 -const AUTOMATION_STATES = new Set<VectorMagicAutomationState>([
+     62 -  'launching',
+     63 -  'tracing',
+     64 -  'reviewing',
+     65 -  'exporting',
+     66 -  'complete',
+     67 -  'cancelled',
+     68 -  'error',
+     69 -]);
+     70 -
+     71 -/** Locate the real Vector Magic executable without substituting another tracer. */
+     72 -export function findVectorMagicExecutable(): string | null {
+     73 -  const configured = process.env.VECTOR_MAGIC_EXE;
+     74 -  const candidates = [
+     75 -    configured,
+     76 -    REPOSITORY_VECTOR_MAGIC_EXECUTABLE,
+     77 -    'C:\\Program Files (x86)\\Vector Magic\\vmde.exe',
+     78 -    'C:\\Program Files\\Vector Magic\\vmde.exe',
+     79 -  ];
+     80 -  return (
+     81 -    candidates.find((candidate): candidate is string =>
+     82 -      Boolean(candidate && existsSync(candidate)),
+     83 -    ) ?? null
+     84 -  );
+     85 -}
+     86 -
+     87 -export function vectorMagicPlugin(): Plugin {
+     88 -  const sessions = new Map<string, VectorMagicSession>();
+     89 -
+     90 -  const install = (middlewares: Connect.Server) => {
+     91 -    middlewares.use('/api/vector-magic/availability', (_req, res) => {
+     92 -      if (!isLoopbackAddress(_req.socket.remoteAddress)) {
+     93 -        sendJson(res, 403, { error: 'LOCAL_ACCESS_ONLY' });
+     94 -        return;
+     95 -      }
+     96 -      const executable = findVectorMagicExecutable();
+     97 -      sendJson(res, 200, {
+     98 -        available: executable !== null,
+     99 -        executable,
+    100 -      });
+    101 -    });
+    102 -
+    103 -    middlewares.use('/api/vector-magic/start', (req, res) => {
+    104 -      if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    105 -        sendJson(res, 403, { error: 'LOCAL_ACCESS_ONLY' });
+    106 -        return;
+    107 -      }
+    108 -      if (req.method !== 'POST') {
+    109 -        sendJson(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+    110 -        return;
+    111 -      }
+    112 -      void startSession(req, res, sessions);
+    113 -    });
+    114 -
+    115 -    middlewares.use('/api/vector-magic/result', (req, res) => {
+    116 -      if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    117 -        sendJson(res, 403, { error: 'LOCAL_ACCESS_ONLY' });
+    118 -        return;
+    119 -      }
+    120 -      if (req.method !== 'GET') {
+    121 -        sendJson(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+    122 -        return;
+    123 -      }
+    124 -      getSessionResult(req, res, sessions);
+    125 -    });
+    126 -
+    127 -    middlewares.use('/api/vector-magic/cancel', (req, res) => {
+    128 -      if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    129 -        sendJson(res, 403, { error: 'LOCAL_ACCESS_ONLY' });
+    130 -        return;
+    131 -      }
+    132 -      if (req.method !== 'POST') {
+    133 -        sendJson(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+    134 -        return;
+    135 -      }
+    136 -      cancelSession(req, res, sessions);
+    137 -    });
+    138 -  };
+    139 -
+    140 -  return {
+    141 -    name: 'vector-magic-desktop-bridge',
+    142 -    configureServer(server) {
+    143 -      install(server.middlewares);
+    144 -    },
+    145 -    configurePreviewServer(server) {
+    146 -      install(server.middlewares);
+    147 -    },
+    148 -  };
+    149 -}
+    150 -
+    151 -async function startSession(
+    152 -  req: IncomingMessage,
+    153 -  res: ServerResponse,
+    154 -  sessions: Map<string, VectorMagicSession>,
+    155 -): Promise<void> {
+    156 -  try {
+    157 -    const executable = findVectorMagicExecutable();
+    158 -    if (!executable) {
+    159 -      sendJson(res, 404, { error: 'VECTOR_MAGIC_NOT_INSTALLED' });
+    160 -      return;
+    161 -    }
+    162 -
+    163 -    const activeSession = [...sessions.values()].find((session) => {
+    164 -      const status = readAutomationStatus(session);
+    165 -      return !isTerminalAutomationState(status.state);
+    166 -    });
+    167 -    if (activeSession) {
+    168 -      sendJson(res, 409, { error: 'VECTOR_MAGIC_BUSY' });
+    169 -      return;
+    170 -    }
+    171 -
+    172 -    const mimeType = String(req.headers['content-type'] ?? '').split(';', 1)[0].toLowerCase();
+    173 -    const extension = MIME_EXTENSIONS[mimeType];
+    174 -    if (!extension) {
+    175 -      sendJson(res, 415, { error: 'UNSUPPORTED_VECTOR_MAGIC_INPUT' });
+    176 -      return;
+    177 -    }
+    178 -
+    179 -    const sourceName = decodeSourceName(req.headers['x-vector-magic-filename']);
+    180 -    const stem = safeVectorMagicStem(sourceName);
+    181 -    const body = await readBody(req);
+    182 -    if (!isSupportedVectorMagicBitmap(body, extension)) {
+    183 -      sendJson(res, 400, { error: 'INVALID_BITMAP' });
+    184 -      return;
+    185 -    }
+    186 -
+    187 -    const sessionId = randomUUID();
+    188 -    const directory = join(SESSION_ROOT, sessionId);
+    189 -    mkdirSync(directory, { recursive: true });
+    190 -
+    191 -    const inputPath = join(directory, `${stem}${extension}`);
+    192 -    const expectedOutputPath = join(directory, `${stem}.svg`);
+    193 -    const statusPath = join(directory, 'automation-status.json');
+    194 -    const cancelPath = join(directory, 'cancel');
+    195 -    writeFileSync(inputPath, body, { flag: 'wx' });
+    196 -
+    197 -    const initialStatus: VectorMagicAutomationStatus = {
+    198 -      state: 'launching',
+    199 -      progress: 0.01,
+    200 -      updatedAt: new Date().toISOString(),
+    201 -    };
+    202 -    writeAutomationStatus(statusPath, initialStatus);
+    203 -    const automationProcess = await launchVectorMagicAutomation({
+    204 -      executable,
+    205 -      inputPath,
+    206 -      expectedOutputPath,
+    207 -      statusPath,
+    208 -      cancelPath,
+    209 -      cwd: directory,
+    210 -    });
+    211 -    const session: VectorMagicSession = {
+    212 -      directory,
+    213 -      expectedOutputPath,
+    214 -      inputPath,
+    215 -      statusPath,
+    216 -      cancelPath,
+    217 -      automationProcess,
+    218 -      lastStatus: initialStatus,
+    219 -    };
+    220 -    sessions.set(sessionId, session);
+    221 -    monitorAutomationProcess(session);
+    222 -
+    223 -    sendJson(res, 200, {
+    224 -      success: true,
+    225 -      sessionId,
+    226 -      executable,
+    227 -      inputPath,
+    228 -      expectedOutputPath,
+    229 -    });
+    230 -  } catch (error) {
+    231 -    const message = error instanceof Error ? error.message : String(error);
+    232 -    const status = message === 'INPUT_TOO_LARGE' ? 413 : 500;
+    233 -    sendJson(res, status, { error: message });
+    234 -  }
+    235 -}
+    236 -
+    237 -function getSessionResult(
+    238 -  req: IncomingMessage,
+    239 -  res: ServerResponse,
+    240 -  sessions: Map<string, VectorMagicSession>,
+    241 -): void {
+    242 -  try {
+    243 -    const url = new URL(req.url ?? '/', 'http://localhost');
+    244 -    const sessionId = url.searchParams.get('session');
+    245 -    const session = sessionId ? sessions.get(sessionId) : undefined;
+    246 -    if (!session) {
+    247 -      sendJson(res, 404, { error: 'UNKNOWN_SESSION' });
+    248 -      return;
+    249 -    }
+    250 -
+    251 -    const automationStatus = readAutomationStatus(session);
+    252 -    const outputPath = findExportedSvg(session);
+    253 -    if (!outputPath) {
+    254 -      if (automationStatus.state === 'error') {
+    255 -        sendJson(res, 500, {
+    256 -          error: automationStatus.error ?? 'VECTOR_MAGIC_AUTOMATION_FAILED',
+    257 -        });
+    258 -        return;
+    259 -      }
+    260 -      if (automationStatus.state === 'cancelled') {
+    261 -        sendJson(res, 409, { error: 'VECTOR_MAGIC_CANCELLED' });
+    262 -        return;
+    263 -      }
+    264 -      if (automationStatus.state === 'complete') {
+    265 -        sendJson(res, 500, { error: 'VECTOR_MAGIC_OUTPUT_MISSING' });
+    266 -        return;
+    267 -      }
+    268 -      sendJson(res, 200, {
+    269 -        ready: false,
+    270 -        state: automationStatus.state,
+    271 -        progress: automationStatus.progress,
+    272 -        expectedOutputPath: session.expectedOutputPath,
+    273 -      });
+    274 -      return;
+    275 -    }
+    276 -
+    277 -    const size = statSync(outputPath).size;
+    278 -    if (size > MAX_SVG_BYTES) {
+    279 -      sendJson(res, 422, { error: 'SVG_TOO_LARGE' });
+    280 -      return;
+    281 -    }
+    282 -    if (size <= 0) {
+    283 -      sendJson(res, 200, {
+    284 -        ready: false,
+    285 -        state: automationStatus.state,
+    286 -        progress: automationStatus.progress,
+    287 -        expectedOutputPath: session.expectedOutputPath,
+    288 -      });
+    289 -      return;
+    290 -    }
+    291 -
+    292 -    const svg = readFileSync(outputPath, 'utf8');
+    293 -    // A save notification can arrive before the write is complete. Treat an
+    294 -    // incomplete document as pending and let the browser poll again.
+    295 -    if (!/<svg(?:\s|>)/i.test(svg) || !/<\/svg\s*>/i.test(svg)) {
+    296 -      sendJson(res, 200, {
+    297 -        ready: false,
+    298 -        state: automationStatus.state,
+    299 -        progress: automationStatus.progress,
+    300 -        expectedOutputPath: session.expectedOutputPath,
+    301 -      });
+    302 -      return;
+    303 -    }
+    304 -
+    305 -    sendJson(res, 200, {
+    306 -      ready: true,
+    307 -      state: 'complete',
+    308 -      progress: 1,
+    309 -      filename: basename(outputPath),
+    310 -      outputPath,
+    311 -      svg,
+    312 -    });
+    313 -  } catch (error) {
+    314 -    sendJson(res, 500, {
+    315 -      error: error instanceof Error ? error.message : String(error),
+    316 -    });
+    317 -  }
+    318 -}
+    319 -
+    320 -function cancelSession(
+    321 -  req: IncomingMessage,
+    322 -  res: ServerResponse,
+    323 -  sessions: Map<string, VectorMagicSession>,
+    324 -): void {
+    325 -  try {
+    326 -    const url = new URL(req.url ?? '/', 'http://localhost');
+    327 -    const sessionId = url.searchParams.get('session');
+    328 -    const session = sessionId ? sessions.get(sessionId) : undefined;
+    329 -    if (!session) {
+    330 -      sendJson(res, 404, { error: 'UNKNOWN_SESSION' });
+    331 -      return;
+    332 -    }
+    333 -
+    334 -    writeFileSync(session.cancelPath, 'cancel', { flag: 'a' });
+    335 -    sendJson(res, 200, { success: true });
+    336 -  } catch (error) {
+    337 -    sendJson(res, 500, {
+    338 -      error: error instanceof Error ? error.message : String(error),
+    339 -    });
+    340 -  }
+    341 -}
+    342 -
+    343 -function findExportedSvg(session: VectorMagicSession): string | null {
+    344 -  if (existsSync(session.expectedOutputPath)) return session.expectedOutputPath;
+    345 -
+    346 -  // Keep a directory-confined fallback for Desktop variants that normalise the
+    347 -  // requested filename while saving. Automation still selects SVG explicitly.
+    348 -  const candidates = readdirSync(session.directory, { withFileTypes: true })
+    349 -    .filter((entry) => entry.isFile() && extname(entry.name).toLowerCase() === '.svg')
+    350 -    .map((entry) => join(session.directory, entry.name))
+    351 -    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+    352 -  return candidates[0] ?? null;
+    353 -}
+    354 -
+    355 -interface AutomationLaunchOptions {
+    356 -  executable: string;
+    357 -  inputPath: string;
+    358 -  expectedOutputPath: string;
+    359 -  statusPath: string;
+    360 -  cancelPath: string;
+    361 -  cwd: string;
+    362 -}
+    363 -
+    364 -function launchVectorMagicAutomation(options: AutomationLaunchOptions): Promise<ChildProcess> {
+    365 -  return new Promise((resolve, reject) => {
+    366 -    if (!existsSync(AUTOMATION_SCRIPT)) {
+    367 -      reject(new Error('VECTOR_MAGIC_AUTOMATION_SCRIPT_MISSING'));
+    368 -      return;
+    369 -    }
+    370 -
+    371 -    const windowsDirectory = process.env.WINDIR ?? 'C:\\Windows';
+    372 -    const powershell = join(
+    373 -      windowsDirectory,
+    374 -      'System32',
+    375 -      'WindowsPowerShell',
+    376 -      'v1.0',
+    377 -      'powershell.exe',
+    378 -    );
+    379 -    const child = spawn(
+    380 -      powershell,
+    381 -      [
+    382 -        '-NoLogo',
+    383 -        '-NoProfile',
+    384 -        '-NonInteractive',
+    385 -        '-ExecutionPolicy',
+    386 -        'Bypass',
+    387 -        '-File',
+    388 -        AUTOMATION_SCRIPT,
+    389 -        '-Executable',
+    390 -        options.executable,
+    391 -        '-InputPath',
+    392 -        options.inputPath,
+    393 -        '-OutputPath',
+    394 -        options.expectedOutputPath,
+    395 -        '-StatusPath',
+    396 -        options.statusPath,
+    397 -        '-CancelPath',
+    398 -        options.cancelPath,
+    399 -      ],
+    400 -      {
+    401 -      cwd: options.cwd,
+    402 -      stdio: 'ignore',
+    403 -      windowsHide: true,
+    404 -      },
+    405 -    );
+    406 -    child.once('error', reject);
+    407 -    child.once('spawn', () => {
+    408 -      resolve(child);
+    409 -    });
+    410 -  });
+    411 -}
+    412 -
+    413 -function monitorAutomationProcess(session: VectorMagicSession): void {
+    414 -  session.automationProcess.once('error', (error) => {
+    415 -    writeAutomationStatus(session.statusPath, {
+    416 -      state: 'error',
+    417 -      progress: 0,
+    418 -      error: error.message || 'VECTOR_MAGIC_AUTOMATION_FAILED',
+    419 -      updatedAt: new Date().toISOString(),
+    420 -    });
+    421 -  });
+    422 -  session.automationProcess.once('exit', (code) => {
+    423 -    setTimeout(() => {
+    424 -      const status = readAutomationStatus(session);
+    425 -      if (isTerminalAutomationState(status.state)) return;
+    426 -      writeAutomationStatus(session.statusPath, {
+    427 -        state: 'error',
+    428 -        progress: 0,
+    429 -        error: `VECTOR_MAGIC_AUTOMATION_EXIT_${code ?? 'UNKNOWN'}`,
+    430 -        updatedAt: new Date().toISOString(),
+    431 -      });
+    432 -    }, 100);
+    433 -  });
+    434 -}
+    435 -
+    436 -function readAutomationStatus(session: VectorMagicSession): VectorMagicAutomationStatus {
+    437 -  try {
+    438 -    const parsed = parseVectorMagicAutomationStatus(readFileSync(session.statusPath, 'utf8'));
+    439 -    if (parsed) session.lastStatus = parsed;
+    440 -  } catch {
+    441 -    // The PowerShell helper replaces this tiny file while the browser polls.
+    442 -    // A transient read failure simply uses the last complete status document.
+    443 -  }
+    444 -  return session.lastStatus;
+    445 -}
+    446 -
+    447 -export function parseVectorMagicAutomationStatus(
+    448 -  source: string,
+    449 -): VectorMagicAutomationStatus | null {
+    450 -  try {
+    451 -    const value = JSON.parse(source) as Partial<VectorMagicAutomationStatus>;
+    452 -    if (!value.state || !AUTOMATION_STATES.has(value.state)) return null;
+    453 -    if (typeof value.progress !== 'number' || !Number.isFinite(value.progress)) return null;
+    454 -    return {
+    455 -      state: value.state,
+    456 -      progress: Math.max(0, Math.min(1, value.progress)),
+    457 -      ...(typeof value.error === 'string' ? { error: value.error } : {}),
+    458 -      ...(typeof value.updatedAt === 'string' ? { updatedAt: value.updatedAt } : {}),
+    459 -    };
+    460 -  } catch {
+    461 -    return null;
+    462 -  }
+    463 -}
+    464 -
+    465 -function isTerminalAutomationState(state: VectorMagicAutomationState): boolean {
+    466 -  return state === 'complete' || state === 'cancelled' || state === 'error';
+    467 -}
+    468 -
+    469 -function writeAutomationStatus(path: string, status: VectorMagicAutomationStatus): void {
+    470 -  writeFileSync(path, JSON.stringify(status), 'utf8');
+    471 -}
+    472 -
+    473 -function readBody(req: IncomingMessage): Promise<Buffer> {
+    474 -  return new Promise((resolve, reject) => {
+    475 -    const chunks: Buffer[] = [];
+    476 -    let total = 0;
+    477 -    let tooLarge = false;
+    478 -
+    479 -    req.on('data', (chunk: Buffer | Uint8Array) => {
+    480 -      total += chunk.length;
+    481 -      if (total > MAX_INPUT_BYTES) {
+    482 -        tooLarge = true;
+    483 -        return;
+    484 -      }
+    485 -      chunks.push(Buffer.from(chunk));
+    486 -    });
+    487 -    req.on('end', () => {
+    488 -      if (tooLarge) reject(new Error('INPUT_TOO_LARGE'));
+    489 -      else resolve(Buffer.concat(chunks));
+    490 -    });
+    491 -    req.on('error', reject);
+    492 -  });
+    493 -}
+    494 -
+    495 -function decodeSourceName(value: string | string[] | undefined): string {
+    496 -  const encoded = Array.isArray(value) ? value[0] : value;
+    497 -  if (!encoded) return 'pattern';
+    498 -  try {
+    499 -    return decodeURIComponent(encoded);
+    500 -  } catch {
+    501 -    return 'pattern';
+    502 -  }
+    503 -}
+    504 -
+    505 -export function safeVectorMagicStem(filename: string): string {
+    506 -  const parsed = parse(basename(filename));
+    507 -  const cleaned = parsed.name.replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '');
+    508 -  const stem = cleaned.slice(0, 80);
+    509 -  return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem) ? 'pattern' : stem || 'pattern';
+    510 -}
+    511 -
+    512 -export function isSupportedVectorMagicBitmap(data: Buffer, extension: string): boolean {
+    513 -  if (data.length < 4) return false;
+    514 -  if (extension === '.png') {
+    515 -    return data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    516 -  }
+    517 -  if (extension === '.jpg') return data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+    518 -  if (extension === '.bmp') return data[0] === 0x42 && data[1] === 0x4d;
+    519 -  if (extension === '.gif') return data.subarray(0, 3).toString('ascii') === 'GIF';
+    520 -  if (extension === '.tif') {
+    521 -    const header = data.subarray(0, 4).toString('hex');
+    522 -    return header === '49492a00' || header === '4d4d002a';
+    523 -  }
+    524 -  return false;
+    525 -}
+    526 -
+    527 -export function isLoopbackAddress(address: string | undefined): boolean {
+    528 -  if (!address) return false;
+    529 -  return (
+    530 -    address === '::1' ||
+    531 -    address === '127.0.0.1' ||
+    532 -    address.startsWith('127.') ||
+    533 -    address.startsWith('::ffff:127.')
+    534 -  );
+    535 -}
+    536 -
+    537 -function sendJson(res: ServerResponse, status: number, body: unknown): void {
+    538 -  res.statusCode = status;
+    539 -  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    540 -  res.setHeader('Cache-Control', 'no-store');
+    541 -  res.end(JSON.stringify(body));
+    542 -}
+
+  └ src\pattern\vectorMagicDesktop.ts (+0 -155)
+      1 -import type { RawPattern } from './types';
+      2 -
+      3 -const VECTOR_MAGIC_NATIVE_INPUTS = new Set(['image/png', 'image/jpeg']);
+      4 -
+      5 -export interface VectorMagicSession {
+      6 -  sessionId: string;
+      7 -  executable: string;
+      8 -  inputPath: string;
+      9 -  expectedOutputPath: string;
+     10 -}
+     11 -
+     12 -export type VectorMagicAutomationState =
+     13 -  | 'launching'
+     14 -  | 'tracing'
+     15 -  | 'reviewing'
+     16 -  | 'exporting'
+     17 -  | 'complete';
+     18 -
+     19 -export interface VectorMagicPendingResult {
+     20 -  ready: false;
+     21 -  state: VectorMagicAutomationState;
+     22 -  progress: number;
+     23 -  expectedOutputPath: string;
+     24 -}
+     25 -
+     26 -export interface VectorMagicReadyResult {
+     27 -  ready: true;
+     28 -  state: 'complete';
+     29 -  progress: 1;
+     30 -  filename: string;
+     31 -  outputPath: string;
+     32 -  svg: string;
+     33 -}
+     34 -
+     35 -export type VectorMagicResult = VectorMagicPendingResult | VectorMagicReadyResult;
+     36 -
+     37 -/**
+     38 - * Launch the real, locally available Vector Magic Desktop executable. Native
+     39 - * PNG/JPEG uploads are forwarded byte-for-byte. Formats unsupported by the
+     40 - * Desktop Edition and procedural patterns are losslessly converted
+     41 - * to PNG first; Vector Magic still performs all tracing/vectorization.
+     42 - */
+     43 -export async function startVectorMagicDesktop(
+     44 -  pattern: RawPattern,
+     45 -  signal?: AbortSignal,
+     46 -): Promise<VectorMagicSession> {
+     47 -  const source = await vectorMagicInput(pattern);
+     48 -  const response = await fetch('/api/vector-magic/start', {
+     49 -    method: 'POST',
+     50 -    headers: {
+     51 -      'Content-Type': source.blob.type,
+     52 -      'X-Vector-Magic-Filename': encodeURIComponent(source.filename),
+     53 -    },
+     54 -    body: source.blob,
+     55 -    signal,
+     56 -  });
+     57 -  const payload = (await response.json()) as Partial<VectorMagicSession> & {
+     58 -    error?: string;
+     59 -  };
+     60 -  if (!response.ok || !payload.sessionId) {
+     61 -    throw new Error(payload.error ?? 'VECTOR_MAGIC_BRIDGE_FAILED');
+     62 -  }
+     63 -  return payload as VectorMagicSession;
+     64 -}
+     65 -
+     66 -export async function getVectorMagicResult(
+     67 -  sessionId: string,
+     68 -  signal?: AbortSignal,
+     69 -): Promise<VectorMagicResult> {
+     70 -  const response = await fetch(
+     71 -    `/api/vector-magic/result?session=${encodeURIComponent(sessionId)}`,
+     72 -    { signal, cache: 'no-store' },
+     73 -  );
+     74 -  const payload = (await response.json()) as VectorMagicResult & { error?: string };
+     75 -  if (!response.ok) throw new Error(payload.error ?? 'VECTOR_MAGIC_RESULT_FAILED');
+     76 -  return payload;
+     77 -}
+     78 -
+     79 -export async function cancelVectorMagicSession(sessionId: string): Promise<void> {
+     80 -  const response = await fetch(
+     81 -    `/api/vector-magic/cancel?session=${encodeURIComponent(sessionId)}`,
+     82 -    { method: 'POST', cache: 'no-store' },
+     83 -  );
+     84 -  if (response.ok || response.status === 404) return;
+     85 -  const payload = (await response.json()) as { error?: string };
+     86 -  throw new Error(payload.error ?? 'VECTOR_MAGIC_CANCEL_FAILED');
+     87 -}
+     88 -
+     89 -async function vectorMagicInput(
+     90 -  pattern: RawPattern,
+     91 -): Promise<{ blob: Blob; filename: string }> {
+     92 -  if (
+     93 -    pattern.sourceBytes &&
+     94 -    pattern.sourceMimeType &&
+     95 -    VECTOR_MAGIC_NATIVE_INPUTS.has(pattern.sourceMimeType)
+     96 -  ) {
+     97 -    const bytes = pattern.sourceBytes.slice().buffer as ArrayBuffer;
+     98 -    return {
+     99 -      blob: new Blob([bytes], { type: pattern.sourceMimeType }),
+    100 -      filename: pattern.name,
+    101 -    };
+    102 -  }
+    103 -
+    104 -  if (pattern.sourceBytes && pattern.sourceMimeType?.startsWith('image/')) {
+    105 -    const bytes = pattern.sourceBytes.slice().buffer as ArrayBuffer;
+    106 -    const bitmap = await createImageBitmap(new Blob([bytes], { type: pattern.sourceMimeType }));
+    107 -    try {
+    108 -      const canvas = document.createElement('canvas');
+    109 -      canvas.width = bitmap.width;
+    110 -      canvas.height = bitmap.height;
+    111 -      const context = canvas.getContext('2d');
+    112 -      if (!context) throw new Error('CANVAS_UNAVAILABLE');
+    113 -      context.drawImage(bitmap, 0, 0);
+    114 -      return {
+    115 -        blob: await canvasPng(canvas),
+    116 -        filename: replaceExtension(pattern.name, '.png'),
+    117 -      };
+    118 -    } finally {
+    119 -      bitmap.close?.();
+    120 -    }
+    121 -  }
+    122 -
+    123 -  const canvas = document.createElement('canvas');
+    124 -  canvas.width = pattern.width;
+    125 -  canvas.height = pattern.height;
+    126 -  const context = canvas.getContext('2d');
+    127 -  if (!context) throw new Error('CANVAS_UNAVAILABLE');
+    128 -  const image = context.createImageData(pattern.width, pattern.height);
+    129 -  for (let i = 0; i < pattern.width * pattern.height; i++) {
+    130 -    const value = pattern.luminance[i];
+    131 -    image.data[i * 4] = value;
+    132 -    image.data[i * 4 + 1] = value;
+    133 -    image.data[i * 4 + 2] = value;
+    134 -    image.data[i * 4 + 3] = pattern.alpha?.[i] ?? 255;
+    135 -  }
+    136 -  context.putImageData(image, 0, 0);
+    137 -  return {
+    138 -    blob: await canvasPng(canvas),
+    139 -    filename: replaceExtension(pattern.name, '.png'),
+    140 -  };
+    141 -}
+    142 -
+    143 -function canvasPng(canvas: HTMLCanvasElement): Promise<Blob> {
+    144 -  return new Promise((resolve, reject) => {
+    145 -    canvas.toBlob((blob) => {
+    146 -      if (blob) resolve(blob);
+    147 -      else reject(new Error('PNG_ENCODING_FAILED'));
+    148 -    }, 'image/png');
+    149 -  });
+    150 -}
+    151 -
+    152 -function replaceExtension(filename: string, extension: string): string {
+    153 -  const stem = filename.replace(/\.[^.]+$/, '') || 'pattern';
+    154 -  return `${stem}${extension}`;
+    155 -}
+
+  └ tests\vectorMagicBridge.test.ts (+0 -77)
+     1 -import { afterEach, describe, expect, it } from 'vitest';
+     2 -import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+     3 -import { tmpdir } from 'node:os';
+     4 -import { dirname, join } from 'node:path';
+     5 -import {
+     6 -  findVectorMagicExecutable,
+     7 -  isLoopbackAddress,
+     8 -  isSupportedVectorMagicBitmap,
+     9 -  parseVectorMagicAutomationStatus,
+    10 -  REPOSITORY_VECTOR_MAGIC_EXECUTABLE,
+    11 -  safeVectorMagicStem,
+    12 -} from '../server/vectorMagicBridge';
+    13 -
+    14 -const originalConfiguredPath = process.env.VECTOR_MAGIC_EXE;
+    15 -const temporaryDirectories: string[] = [];
+    16 -
+    17 -afterEach(() => {
+    18 -  if (originalConfiguredPath === undefined) delete process.env.VECTOR_MAGIC_EXE;
+    19 -  else process.env.VECTOR_MAGIC_EXE = originalConfiguredPath;
+    20 -  for (const directory of temporaryDirectories.splice(0)) {
+    21 -    rmSync(directory, { recursive: true, force: true });
+    22 -  }
+    23 -});
+    24 -
+    25 -describe('Vector Magic Desktop bridge', () => {
+    26 -  it('uses an explicitly configured native executable', () => {
+    27 -    const directory = mkdtempSync(join(tmpdir(), 'vector-magic-bridge-test-'));
+    28 -    temporaryDirectories.push(directory);
+    29 -    const executable = join(directory, 'vmde.exe');
+    30 -    writeFileSync(executable, 'test executable placeholder');
+    31 -    process.env.VECTOR_MAGIC_EXE = executable;
+    32 -
+    33 -    expect(findVectorMagicExecutable()).toBe(executable);
+    34 -  });
+    35 -
+    36 -  it.skipIf(!existsSync(REPOSITORY_VECTOR_MAGIC_EXECUTABLE))(
+    37 -    'prefers the complete repo-local Vector Magic Desktop files',
+    38 -    () => {
+    39 -      delete process.env.VECTOR_MAGIC_EXE;
+    40 -      expect(findVectorMagicExecutable()).toBe(REPOSITORY_VECTOR_MAGIC_EXECUTABLE);
+    41 -      const directory = dirname(REPOSITORY_VECTOR_MAGIC_EXECUTABLE);
+    42 -      expect(existsSync(join(directory, 'QtCore4.dll'))).toBe(true);
+    43 -      expect(existsSync(join(directory, 'QtGui4.dll'))).toBe(true);
+    44 -      expect(existsSync(join(directory, 'imageformats', 'qjpeg4.dll'))).toBe(true);
+    45 -    },
+    46 -  );
+    47 -
+    48 -  it('accepts real PNG signatures and rejects MIME spoofing', () => {
+    49 -    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]);
+    50 -    expect(isSupportedVectorMagicBitmap(png, '.png')).toBe(true);
+    51 -    expect(isSupportedVectorMagicBitmap(Buffer.from('not a png'), '.png')).toBe(false);
+    52 -  });
+    53 -
+    54 -  it('confines source names to a safe session filename', () => {
+    55 -    expect(safeVectorMagicStem('../../My detailed logo (final).png')).toBe(
+    56 -      'My_detailed_logo_final',
+    57 -    );
+    58 -    expect(safeVectorMagicStem('CON.png')).toBe('pattern');
+    59 -  });
+    60 -
+    61 -  it('allows only loopback clients to invoke the desktop bridge', () => {
+    62 -    expect(isLoopbackAddress('127.0.0.1')).toBe(true);
+    63 -    expect(isLoopbackAddress('::1')).toBe(true);
+    64 -    expect(isLoopbackAddress('::ffff:127.0.0.1')).toBe(true);
+    65 -    expect(isLoopbackAddress('192.168.1.20')).toBe(false);
+    66 -  });
+    67 -
+    68 -  it('validates and bounds native automation progress', () => {
+    69 -    expect(
+    70 -      parseVectorMagicAutomationStatus(
+    71 -        JSON.stringify({ state: 'tracing', progress: 1.4, updatedAt: 'now' }),
+    72 -      ),
+    73 -    ).toEqual({ state: 'tracing', progress: 1, updatedAt: 'now' });
+    74 -    expect(parseVectorMagicAutomationStatus('{"state":"invented","progress":0.5}')).toBeNull();
+    75 -    expect(parseVectorMagicAutomationStatus('not json')).toBeNull();
+    76 -  });
+    77 -});
+
+  └ vendor\README.md (+7 -12)
+     1 -# Bundled Vector Magic Desktop Runtime
+     2 -
+     3 -This directory contains the verified Vector Magic Desktop Edition 1.15 runtime
+     4 -at `vendor/vector-magic/` so that Gustavo has the complete vectorization engine
+     5 -available out-of-the-box on Windows without needing a separate installation.
+     6 -
+     7 -Executable discovery order in the Vite bridge is:
+     8 -
+     9 -1. `VECTOR_MAGIC_EXE` (environment variable override)
+    10 -2. `vendor/vector-magic/vmde.exe` (repo-bundled runtime)
+    11 -3. Standard Program Files locations (`C:\Program Files (x86)\Vector Magic\vmde.exe`)
+     1 +# Vendor policy
+     2
+    13 -The Vite client build does not copy this native directory into `dist/`.
+     3 +The project no longer bundles a proprietary vectorizer or native executable.
+     4 +Raster-to-vector conversion uses the official `@visioncortex/vtracer` package,
+     5 +an open-source MIT/Apache-2.0 WebAssembly build installed through npm.
+     6
+     7 +This directory is reserved for assets whose licences explicitly permit
+     8 +redistribution. Keep generated binaries and locally licensed applications out
+     9 +of source control.
+
+• Ran $target = (Resolve-Path -LiteralPath "F:\GustavoProject\vendor\vector-magic").Path; $workspace = (Resolve-Path
+  │ -LiteralPath "F:\GustavoProject").Path; if (-not $target.StartsWith($workspace +
+  │ [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Refusing removal outside
+  │ … +2 lines
+  └ Removing tracked obsolete runtime: F:\GustavoProject\vendor\vector-magic
+    rm 'vendor/vector-magic/QtCore4.dll'
+    … +44 lines (ctrl + t to view transcript)
+    rm 'vendor/vector-magic/release_notes.txt'
+    rm 'vendor/vector-magic/vmde.exe'
+
+• Ran Get-Content .gitignore -Encoding utf8; Get-Content package.json -Encoding utf8 | Select-Object -First 25; rg -n
+  │ -i "vector magic|vectormagic|vector-magic|vmde|VECTOR_MAGIC" . -g '!node_modules/**' -g '!dist/**' -g '!*\.map'
+  └ node_modules
+    dist
+    … +50 lines (ctrl + t to view transcript)
+    .\src\state\persistence.ts:78:  // them so old browser state cannot imply that any non-Vector-Magic tracer is
+    .\src\pattern\types.ts:23:   * Original uploaded file bytes. Kept so Vector Magic Desktop receives the
+
+• Ran Get-Content README.md -Encoding utf8 | Select-Object -First 135; Get-Content README.md -Encoding utf8 |
+  │ Select-Object -Skip 175 -First 35
+  └ # Generador y Grabador Paramétrico de Cilindros (Cylindrical Pattern Debosser)
+
+    … +169 lines (ctrl + t to view transcript)
+    import { generateCylinderRelief } from './src/geometry/generateCylinderRelief';
+    import { checkerboardSampler } from './src/pattern/procedural';
+
+• Edited 4 files (+21 -19)
+  └ README.md (+14 -12)
+      4
+      5 -La generación geométrica se ejecuta directamente en el navegador. La integración opcional con Vector Magic us
+         a una copia local licenciada de la aplicación Desktop en el mismo equipo; no sube el diseño a servidores exte
+         rnos.
+      5 +La geometría se genera en un Web Worker del navegador. La vectorización usa el motor abierto VTracer mediante
+          WebAssembly en el servidor local de Vite; no requiere una aplicación licenciada, automatización de ventanas
+         ni subida del diseño a la nube.
+      6
+        ⋮
+    106
+    107 -### Vectorización con Vector Magic Desktop real
+    107 +### Vectorización abierta con VTracer
+    108
+    109 -El proyecto no incluye ni presenta un trazador casero como si fuera Vector Magic. El botón **Vectorizar autom
+         áticamente con Vector Magic** realiza un flujo local con el producto original:
+    109 +El botón **Vectorizar con VTracer** llama al paquete oficial `@visioncortex/vtracer` (MIT/Apache-2.0). El tra
+         zado y la decodificación de imagen se ejecutan localmente con WebAssembly y producen un SVG que vuelve a pasa
+         r por el cargador seguro de la aplicación. Hay perfiles para logos, dibujos/escaneos con iluminación desigual
+          y arte en color. Todos aplican filtrado de motas, curvas spline, simplificación y optimización SVG.
+    110
+    111 -1. Conserva y entrega los bytes originales del PNG/JPG a `vmde.exe`.
+    112 -2. Ejecuta la instalación licenciada de Vector Magic Desktop oculta y selecciona **Fully Automatic**.
+    113 -3. Completa automáticamente la revisión, selecciona explícitamente el exportador SVG y guarda el resultado en
+          una carpeta temporal aislada.
+    114 -4. Muestra únicamente una barra de progreso en la interfaz e importa automáticamente ese SVG real como la nue
+         va fuente del patrón.
+    111 +Consulta [docs/VECTORIZER.md](docs/VECTORIZER.md) para el flujo y los parámetros exactos.
+    112
+    116 -La búsqueda se realiza en este orden: `VECTOR_MAGIC_EXE`, `vendor/vector-magic/vmde.exe`, `C:\Program Files (
+         x86)\Vector Magic\vmde.exe` y `C:\Program Files\Vector Magic\vmde.exe`. Vector Magic debe estar cerrado antes
+          de comenzar porque Desktop usa una sola instancia.
+    113 +### Conjunto de molde y piezas independientes
+    114
+    118 -`vendor/vector-magic/` sirve como copia local junto al repositorio, pero está ignorada por Git y no se incluy
+         e en `dist/`. La licencia incluida de Vector Magic no concede derechos de redistribución del programa; no fue
+         rces esos binarios al historial remoto sin autorización expresa del titular.
+    119 -
+    120 -Consulta [docs/VECTORIZER_HANDOFF.md](docs/VECTORIZER_HANDOFF.md) para el contrato exacto del puente local y
+         sus limitaciones.
+    115 +- Los preajustes **600 ml** y **1 L** aplican dimensiones de capacidad práctica y activan un asa alineada.
+    116 +- Cuerpo y asa son objetos cerrados separados; no se sueldan ni se fusionan mediante booleanas.
+    117 +- La imagen principal puede proyectarse sobre el cuerpo, sobre una placa de relieve cerrada del asa o sobre a
+         mbos.
+    118 +- Un nombre de hasta 24 caracteres puede colocarse verticalmente en el asa con fuentes Moderna, Negrita o Clá
+         sica.
+    119 +- El logo inferior usa una segunda imagen y genera un inserto/sello circular con STL propio; el cuerpo queda
+         intacto.
+    120 +- Cada fila repetida puede usar el diseño principal o cualquier imagen de la biblioteca de filas.
+    121 +- Un conjunto STL se entrega como ZIP con un STL por objeto. 3MF conserva todos los objetos y su posición de
+         montaje en un único paquete.
+    122
+        ⋮
+    182      cylinder/       Tapas terminales y orificio interior
+    183 +    assembly/       Asa separada, nombre, placa de proyección e inserto de logo inferior
+    184      relief/         Generadores binario y continuo, campo de relieve
+        ⋮
+    196  server/
+    195 -  vectorMagicBridge.ts  Puente local restringido a loopback para la aplicación Desktop real
+    197 +  vtracerBridge.ts  Endpoint local para el motor abierto VTracer WASM
+    198  ```
+
+  └ package.json (+1 -1)
+    3    "private": true,
+    4 -  "version": "0.1.0",
+    4 +  "version": "0.2.0",
+    5    "type": "module",
+
+  └ src\pattern\types.ts (+4 -3)
+    22    /**
+    23 -   * Original uploaded file bytes. Kept so Vector Magic Desktop receives the
+    24 -   * real source artwork instead of a grayscale reconstruction. Procedural
+    25 -   * patterns do not have an original file and leave these fields undefined.
+    23 +   * Original uploaded file bytes. Kept so the local open-source vectorizer
+    24 +   * receives the real source artwork instead of a grayscale reconstruction.
+    25 +   * Procedural patterns do not have an original file and leave these fields
+    26 +   * undefined.
+    27     */
+
+  └ src\state\persistence.ts (+2 -3)
+    76      Record<string, unknown>;
+    77 -  // Builds from the abandoned substitute tracer persisted these fields. Drop
+    78 -  // them so old browser state cannot imply that any non-Vector-Magic tracer is
+    79 -  // still active.
+    77 +  // Builds from an abandoned early tracer persisted these fields. Drop them;
+    78 +  // vectorization is now an explicit VTracer action rather than project state.
+    79    delete pattern.vectorize;
+
+• Ran npm install --package-lock-only; rg -n -i "vector magic|vectormagic|vector-magic|vmde|VECTOR_MAGIC" . -g '!
+  │ node_modules/**' -g '!dist/**' -g '!*\.map'
+  └
+    up to date, audited 120 packages in 888ms
+    … +8 lines (ctrl + t to view transcript)
+    npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>`
+    to allow.
+
+• Ran Get-Content package-lock.json -Encoding utf8 -TotalCount 22; git status --short
+  └ {
+      "name": "cylindrical-pattern-debosser",
+    … +101 lines (ctrl + t to view transcript)
+    ?? tests/assembly.test.ts
+    ?? tests/vtracerBridge.test.ts
+
+• Ran npm run typecheck; npm test; npm run build
+  └
+    > cylindrical-pattern-debosser@0.2.0 typecheck
+    … +42 lines (ctrl + t to view transcript)
+    https://rollupjs.org/configuration-options/#output-manualchunks
+    - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+
+• Ran Get-ChildItem playtest-screenshots -File | Select-Object Name,Length | Sort-Object Length | Select-Object -First
+  │ 20; Get-Process -Id 4556 -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime
+  └
+    Name                        Length
+    … +15 lines (ctrl + t to view transcript)
+
+
+
+• Ran try { (Invoke-WebRequest -Uri "http://127.0.0.1:4175" -UseBasicParsing -TimeoutSec 2).StatusCode } catch {
+  │ "offline" }
+  └ 200
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The full typecheck, 73-test suite, and production build are green. I’m doing one final browser playtest across the
+  actual roadmap workflow now—600 ml preset, projection target, VTracer import, per-row assignment, handle name,
+  bottom-logo insert, and multi-object export—so any remaining issues are user-facing rather than compiler-only.
+
+• Ran @'
+  │ import { chromium } from 'playwright';
+  │ const browser=await chromium.launch({headless:true});
+  │ … +37 lines
+  └ node:internal/modules/run_main:107
+        triggerUncaughtException(
+    … +17 lines (ctrl + t to view transcript)
+
+    Node.js v24.18.0
+
+• Ran @'
+  │ import { chromium } from 'playwright';
+  │ const browser=await chromium.launch({headless:true});
+  │ … +37 lines
+  └ node:internal/modules/run_main:107
+        triggerUncaughtException(
+    … +16 lines (ctrl + t to view transcript)
+
+    Node.js v24.18.0
+
+◦ Running @'
+  │ import { chromium } from 'playwright';
+  │ const browser=await chromium.launch({headless:true});
+  │ … +37 lines
+
+⚠ Heads up, you have less than 10% of your weekly limit left. Run /status for a breakdown.
+
+• Ran @'
+  │ import { chromium } from 'playwright';
+  │ const browser=await chromium.launch({headless:true});
+  │ … +37 lines
+  └ node:internal/modules/run_main:107
+        triggerUncaughtException(
+    … +42 lines (ctrl + t to view transcript)
+
+    Node.js v24.18.0
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report
+the issue.
+
+
+› make a handoff/markdown of everything you have done, for gemini to take over
+
+
+• I’ll create a self-contained Gemini handoff in the repository covering the architecture changes, files touched,
+  verification results, the one unresolved browser-playtest issue, and exact next steps. I’ll base it on the current
+  worktree so Gemini can resume without reconstructing context.
+
+• Ran git status --short; git diff --stat; git diff -- package.json vite.config.ts src/types/index.ts
+  │ src/state/defaults.ts | Select-Object -First 500; try { (Invoke-WebRequest -Uri "http://127.0.0.1:4175"
+  │ -UseBasicParsing -TimeoutSec 2).StatusCode } catch { "vite-offline" }
+  └  D PUSH_HANDOFF.md
+     M README.md
+    … +414 lines (ctrl + t to view transcript)
+    warning: in the working copy of 'src/types/index.ts', LF will be replaced by CRLF the next time Git touches it
+    warning: in the working copy of 'vite.config.ts', LF will be replaced by CRLF the next time Git touches it
+
+• Ran $connection = Get-NetTCPConnection -LocalPort 4175 -State Listen -ErrorAction SilentlyContinue | Select-Object
+  │ -First 1; if ($connection) { Get-Process -Id $connection.OwningProcess | Select-Object
+  │ Id,ProcessName,StartTime,Path } else { 'no-listener' }; git log -1 --oneline
+  └
+    1695d0e feat(presets): add playtested relief and heightmap workflow presets (logos, waves, cobblestone, contours,
+    … +4 lines (ctrl + t to view transcript)
+
+
+
+• Added GEMINI_HANDOFF.md (+479 -0)
+      1 +# Gemini Handoff — Mold Roadmap + Open-Source Vectorizer
+      2 +
+      3 +Date: 2026-08-17 (Europe/London)
+      4 +Workspace: `F:\GustavoProject`
+      5 +Branch: `main`
+      6 +Baseline commit: `1695d0e feat(presets): add playtested relief and heightmap workflow presets (logos, waves,
+         cobblestone, contours, stamp)`
+      7 +Current app version in the worktree: `0.2.0`
+      8 +No commit has been created for this work.
+      9 +
+     10 +## User request
+     11 +
+     12 +The user supplied a roadmap asking for:
+     13 +
+     14 +1. A 600 ml mold preset.
+     15 +2. A 1 L mold preset.
+     16 +3. Two assembled pieces that are not fused into one mesh.
+     17 +4. A selector for which piece receives the projected artwork.
+     18 +5. Replacement of the broken Vector Magic integration with a very good open-source vectorizer.
+     19 +6. A second, independent bottom-logo image that produces its own STL and leaves the main body intact.
+     20 +7. A name on the handle with several fonts.
+     21 +8. Individual artwork selection row by row.
+     22 +
+     23 +The attached UI screenshot looked like a cylindrical body plus a handle. I interpreted “the 2 molds/models” a
+         s **body + handle**, aligned in one preview but exported as separate printable objects. Confirm this interpre
+         tation with the user if their actual intent was two mold halves.
+     24 +
+     25 +## High-level result
+     26 +
+     27 +The worktree now contains a broad first implementation of every roadmap item:
+     28 +
+     29 +- 600 ml and 1 L presets.
+     30 +- Optional separate body/handle assembly.
+     31 +- Body / handle / both projection target.
+     32 +- VTracer replacing Vector Magic.
+     33 +- Independent bottom-logo stamp/insert.
+     34 +- Handle name with three bundled font choices.
+     35 +- Per-row artwork library and assignments.
+     36 +- Separate-object exports: multi-object 3MF or ZIP of individual STLs.
+     37 +- IndexedDB persistence for primary art, row art, and bottom-logo art.
+     38 +- English and Spanish UI strings.
+     39 +- New geometry, vectorizer, row-sampler, and exporter tests.
+     40 +
+     41 +TypeScript, all unit tests, and the production build pass. One full browser workflow still needs diagnosis: a
+         fter combining all features with complex screenshots as artwork, the 3MF export button stayed disabled (detai
+         ls below).
+     42 +
+     43 +## Important interpretation and geometry caveats
+     44 +
+     45 +These should be understood before extending the implementation:
+     46 +
+     47 +1. **The cylindrical body remains the original relief-cylinder generator.** It is not yet a physically hollow
+          cup or a two-part casting mold. The capacity presets use practical approximate dimensions, but the kernel do
+         es not calculate liquid volume.
+     48 +2. **Body and handle are separate closed shells.** They are not welded or boolean-unioned. A small configurab
+         le gap keeps them separate in the assembled preview.
+     49 +3. **Handle projection uses a closed relief plaque on the handle’s outer bar.** It does not remesh the entire
+          C-shaped handle surface. For deboss, the plaque is modeled as a raised field with the pattern carved down in
+         to it, avoiding CSG.
+     50 +4. **Handle lettering is generated with Three.js `TextGeometry`.** The text shell overlaps the handle slightl
+         y and is concatenated into the handle object; it is not boolean-unioned. The topology audit reports closed sh
+         ells, but the validator does not detect shell intersections.
+     51 +5. **The bottom logo is a separate circular stamp/insert below the body.** It never subtracts from or damages
+          the body. If the user expects a keyed cavity in the body for the insert, that is not implemented yet.
+     52 +6. **Project JSON files still do not embed image bytes.** Artwork persists locally in IndexedDB. This was alr
+         eady true for the primary pattern and now also applies to row designs and the bottom logo.
+     53 +
+     54 +## Open-source vectorizer replacement
+     55 +
+     56 +### Decision
+     57 +
+     58 +Vector Magic was replaced with the official Vision Cortex VTracer package:
+     59 +
+     60 +```json
+     61 +"@visioncortex/vtracer": "^1.0.0-alpha.3"
+     62 +```
+     63 +
+     64 +Reasons:
+     65 +
+     66 +- Official package from the VTracer project.
+     67 +- MIT OR Apache-2.0.
+     68 +- Rust engine compiled to WebAssembly.
+     69 +- No native executable, licensed desktop install, hidden window, or UI automation.
+     70 +- Supports spline fitting, binary/adaptive tracing, colour clustering, speckle removal, simplification, and S
+         VG optimisation.
+     71 +
+     72 +### New flow
+     73 +
+     74 +```text
+     75 +raster upload
+     76 +  -> POST /api/vectorizer/trace
+     77 +  -> official @visioncortex/vtracer WASM package
+     78 +  -> SVG
+     79 +  -> existing safe SVG loader
+     80 +  -> processed mask / geometry
+     81 +```
+     82 +
+     83 +Three profiles exist:
+     84 +
+     85 +- `logo`: fixed-threshold black/white spline tracing.
+     86 +- `drawing`: adaptive black/white thresholding for scans and uneven lighting.
+     87 +- `photo`: poster-style colour clustering with a compact palette.
+     88 +
+     89 +The app’s binary threshold is sent to the logo profile. Input is capped at 25 MiB.
+     90 +
+     91 +### New vectorizer files
+     92 +
+     93 +- `server/vtracerBridge.ts`
+     94 +- `src/pattern/openSourceVectorizer.ts`
+     95 +- `docs/VECTORIZER.md`
+     96 +- `tests/vtracerBridge.test.ts`
+     97 +
+     98 +### Removed Vector Magic implementation
+     99 +
+    100 +The following obsolete files are deleted in the worktree:
+    101 +
+    102 +- `server/vectorMagicBridge.ts`
+    103 +- `src/pattern/vectorMagicDesktop.ts`
+    104 +- `scripts/vectorMagicAutomation.ps1`
+    105 +- `tests/vectorMagicBridge.test.ts`
+    106 +- `docs/VECTORIZER_HANDOFF.md`
+    107 +- old `PUSH_HANDOFF.md`
+    108 +- the entire tracked `vendor/vector-magic/` runtime (EXE, DLLs, samples, and licences)
+    109 +
+    110 +The runtime deletion is intentional and recoverable from Git history. `vendor/README.md` now documents the op
+         en-source-only vendor policy.
+    111 +
+    112 +### Verified vectorizer behavior
+    113 +
+    114 +A real PNG was posted through the running endpoint and returned:
+    115 +
+    116 +- HTTP 200
+    117 +- `Content-Type: image/svg+xml; charset=utf-8`
+    118 +- valid SVG with two `<path>` elements
+    119 +
+    120 +The browser also successfully replaced a raster upload with the returned VTracer SVG and displayed “The VTrac
+         er SVG is now the active pattern.”
+    121 +
+    122 +The Vite plugin installs the endpoint in both `configureServer` and `configurePreviewServer`. A purely static
+          deployment of `dist/` alone will not have this endpoint; local `vite`/`vite preview` is still required for v
+         ectorization.
+    123 +
+    124 +## Settings and data model
+    125 +
+    126 +`src/types/index.ts` now adds:
+    127 +
+    128 +- `PatternSettings.rowPatternIds`
+    129 +- `ProjectionTarget = 'body' | 'handle' | 'both'`
+    130 +- `HandleFont = 'modern' | 'bold' | 'classic'`
+    131 +- `MoldAssemblySettings`
+    132 +- `HandleNameSettings`
+    133 +- `BottomLogoSettings`
+    134 +- `ExportScope = 'assembly' | 'body' | 'handle' | 'bottomLogo'`
+    135 +- `PrintablePart` / `PrintablePartId`
+    136 +
+    137 +`ProjectSettings` now includes:
+    138 +
+    139 +```ts
+    140 +assembly: MoldAssemblySettings;
+    141 +handleName: HandleNameSettings;
+    142 +bottomLogo: BottomLogoSettings;
+    143 +```
+    144 +
+    145 +`APP_VERSION`, `package.json`, and `package-lock.json` are updated to `0.2.0`.
+    146 +
+    147 +Migration in `src/state/persistence.ts` merges all new defaults and normalizes `rowPatternIds`, so old local
+         settings should continue to load.
+    148 +
+    149 +## Capacity presets
+    150 +
+    151 +Added in `src/state/defaults.ts`:
+    152 +
+    153 +### 600 ml
+    154 +
+    155 +```ts
+    156 +cylinder: { diameter: 90, height: 111, boreEnabled: false, boreDiameter: 8 }
+    157 +assembly: {
+    158 +  enabled: true,
+    159 +  projectionTarget: 'body',
+    160 +  handleExtension: 40,
+    161 +  handleBarWidth: 12,
+    162 +  handleDepth: 16,
+    163 +  partGap: 0.4,
+    164 +}
+    165 +```
+    166 +
+    167 +The comment documents an approximate 84 mm internal diameter × 108 mm usable height (~600 ml), with nominal w
+         all allowance reflected in the outer dimensions.
+    168 +
+    169 +### 1 L
+    170 +
+    171 +```ts
+    172 +cylinder: { diameter: 102, height: 141, boreEnabled: false, boreDiameter: 8 }
+    173 +assembly: {
+    174 +  enabled: true,
+    175 +  projectionTarget: 'body',
+    176 +  handleExtension: 48,
+    177 +  handleBarWidth: 14,
+    178 +  handleDepth: 20,
+    179 +  partGap: 0.5,
+    180 +}
+    181 +```
+    182 +
+    183 +The comment documents an approximate 96 mm internal diameter × 138 mm usable height (~1 litre).
+    184 +
+    185 +Selecting either preset updates both cylinder and assembly settings.
+    186 +
+    187 +## Multi-part assembly geometry
+    188 +
+    189 +Main file:
+    190 +
+    191 +- `src/geometry/assembly/generateMoldAssembly.ts`
+    192 +
+    193 +It generates:
+    194 +
+    195 +1. `body` — existing cylindrical relief mesh.
+    196 +2. `handle` — watertight C/U-shaped extruded prism.
+    197 +3. Optional handle artwork plaque.
+    198 +4. Optional handle text geometry.
+    199 +5. Optional `bottomLogo` — circular radial height-field stamp/insert.
+    200 +
+    201 +The returned `parts` remain independent. A concatenated preview mesh is built with `mergeMeshes`, which conca
+         tenates buffers but performs no welding/boolean fusion.
+    202 +
+    203 +`src/geometry/mesh/meshOps.ts` adds:
+    204 +
+    205 +- `mergeMeshes`
+    206 +- `orientPartsTogether`
+    207 +- shared bed translation for multi-object 3MF
+    208 +
+    209 +Three.js extrusion UV/normal attributes are discarded before positional welding. This fixed initially open ha
+         ndle seams caused by duplicated UV vertices.
+    210 +
+    211 +## Handle name
+    212 +
+    213 +UI location: nested **Handle name** section under **Mold assembly**.
+    214 +
+    215 +Choices:
+    216 +
+    217 +- Modern — `helvetiker_regular`
+    218 +- Bold — `helvetiker_bold`
+    219 +- Classic — `optimer_regular`
+    220 +
+    221 +Maximum text length is 24 characters. The lettering is rotated vertically and fitted to the handle’s outer ba
+         r. Typeface JSON comes from `three/examples/fonts` and is bundled into the mesh worker.
+    222 +
+    223 +## Projection target
+    224 +
+    225 +UI location: **Mold assembly → Project artwork onto**.
+    226 +
+    227 +Options:
+    228 +
+    229 +- Body only
+    230 +- Handle only
+    231 +- Body and handle
+    232 +
+    233 +When the body is not targeted, it receives a constant zero sampler and stays smooth. When the handle is targe
+         ted, the primary processed pattern generates the closed relief plaque.
+    234 +
+    235 +## Row-by-row artwork
+    236 +
+    237 +### UI
+    238 +
+    239 +`src/components/PatternSection.tsx` contains a collapsed **Designs by row** section:
+    240 +
+    241 +- Multi-file upload for additional PNG/JPG/WebP/SVG designs.
+    242 +- Removable design library.
+    243 +- One selector for each configured repeat row.
+    244 +- `null` assignment means “Primary artwork”.
+    245 +
+    246 +### Sampling
+    247 +
+    248 +`src/pattern/sampler.ts` adds `createRowPatternSampler`.
+    249 +
+    250 +The source is selected at exact tile-row boundaries before tile-local transforms. Existing repeat, stagger, s
+         eam, top-edge, fit/fill/stretch, and nearest/bilinear behavior is preserved.
+    251 +
+    252 +### Worker and persistence
+    253 +
+    254 +- Worker protocol now uploads a pattern set rather than one pattern.
+    255 +- Worker caches processed masks by processing signature.
+    256 +- Primary, row-library, and bottom-logo patterns are deduplicated by stable ID.
+    257 +- Row designs persist under IndexedDB key `row-designs`.
+    258 +
+    259 +## Independent bottom logo
+    260 +
+    261 +UI location: collapsed **Independent bottom logo** section in the pattern panel.
+    262 +
+    263 +Controls:
+    264 +
+    265 +- Enable independent insert.
+    266 +- Upload/remove separate image.
+    267 +- Insert diameter.
+    268 +- Plate thickness.
+    269 +- Relief depth.
+    270 +- Independent invert toggle.
+    271 +
+    272 +The mesh is a circular polar height field with a closed outer wall and bottom cap. It is positioned below the
+          body in the assembled preview and exported as `bottomLogo`.
+    273 +
+    274 +Bottom-logo art persists under IndexedDB key `bottom-logo`.
+    275 +
+    276 +## Export behavior
+    277 +
+    278 +`ExportSettings.scope` and the UI support:
+    279 +
+    280 +- Complete assembly
+    281 +- Body only
+    282 +- Handle only (when enabled)
+    283 +- Bottom logo only (when enabled and loaded)
+    284 +
+    285 +Behavior:
+    286 +
+    287 +- One selected STL part -> normal binary STL.
+    288 +- Complete multi-part STL -> ZIP containing one binary STL per part.
+    289 +- 3MF -> one package with a separate `<object>` for each part and a build item for each object.
+    290 +
+    291 +`src/exporters/threemf.ts` adds `exportParts`. Existing single-mesh `export` delegates to it.
+    292 +
+    293 +The store automatically falls back from an unavailable handle/bottom-logo export scope to `body` when that fe
+         ature is disabled or removed.
+    294 +
+    295 +## State, worker, and protocol changes
+    296 +
+    297 +Relevant files:
+    298 +
+    299 +- `src/state/store.ts`
+    300 +- `src/state/persistence.ts`
+    301 +- `src/workers/protocol.ts`
+    302 +- `src/workers/MeshWorkerClient.ts`
+    303 +- `src/workers/mesh.worker.ts`
+    304 +
+    305 +Notable changes:
+    306 +
+    307 +- Store state now has `rowPatterns` and `bottomLogoPattern`.
+    308 +- New actions update assembly/name/logo settings and assets.
+    309 +- Worker receives `SET_PATTERNS` / `CLEAR_PATTERNS`.
+    310 +- Generate request includes `bottomLogoPatternId`.
+    311 +- Preview response includes `partIds`.
+    312 +- Dimensions panel shows the number of separate parts.
+    313 +- Export worker filters parts by scope and returns the actual filename (`.stl`, `.3mf`, or `_parts.zip`).
+    314 +
+    315 +## UI and localization
+    316 +
+    317 +Files:
+    318 +
+    319 +- `src/App.tsx`
+    320 +- `src/components/SettingsPanels.tsx`
+    321 +- `src/components/PatternSection.tsx`
+    322 +- `src/components/InfoPanels.tsx`
+    323 +- `src/styles.css`
+    324 +- `src/i18n/en.ts`
+    325 +- `src/i18n/es.ts`
+    326 +
+    327 +Added UI includes the assembly section, projection target, handle dimensions, handle name, vectorizer profile
+         s, row library, row assignments, independent bottom logo, export scope, and separate-part count.
+    328 +
+    329 +Both English and Spanish dictionaries typecheck.
+    330 +
+    331 +## Documentation changes
+    332 +
+    333 +- `README.md` now documents VTracer and the new roadmap features.
+    334 +- `docs/VECTORIZER.md` documents the new vectorization flow and files.
+    335 +- `vendor/README.md` documents that proprietary/native vectorizers must not be bundled.
+    336 +- The obsolete Vector Magic and push handoff documents are deleted.
+    337 +
+    338 +## Tests added/updated
+    339 +
+    340 +### `tests/assembly.test.ts`
+    341 +
+    342 +Tests:
+    343 +
+    344 +- Body and handle remain independent closed printable objects.
+    345 +- Handle name and bottom-logo insert remain topologically closed.
+    346 +- Row-specific artwork switches at exact row boundaries, including the top edge.
+    347 +
+    348 +### `tests/vtracerBridge.test.ts`
+    349 +
+    350 +Tests profile options for logo, adaptive drawing, and colour artwork.
+    351 +
+    352 +### `tests/exporters.test.ts`
+    353 +
+    354 +Adds a multi-object 3MF test confirming:
+    355 +
+    356 +- two `<object>` elements
+    357 +- object names
+    358 +- second build item
+    359 +
+    360 +## Verification already completed
+    361 +
+    362 +The following all passed after the latest implementation changes:
+    363 +
+    364 +```text
+    365 +npm run typecheck
+    366 +  PASS
+    367 +
+    368 +npm test
+    369 +  5 test files passed
+    370 +  73 tests passed
+    371 +
+    372 +npm run build
+    373 +  PASS
+    374 +```
+    375 +
+    376 +Build output warning only:
+    377 +
+    378 +- Main JS chunk ~813.78 kB (gzip ~225.81 kB).
+    379 +- Mesh worker ~394.12 kB.
+    380 +- Vite warns that a chunk exceeds 500 kB.
+    381 +
+    382 +The larger worker is expected partly because of bundled Three.js typeface data. Optimizing font loading is op
+         tional future work.
+    383 +
+    384 +## Browser playtesting completed
+    385 +
+    386 +Running dev server:
+    387 +
+    388 +```text
+    389 +http://127.0.0.1:4175
+    390 +PID 4556 (node)
+    391 +```
+    392 +
+    393 +Confirmed in a clean Playwright browser:
+    394 +
+    395 +- App loads with no page errors.
+    396 +- Existing default model remains valid.
+    397 +- 600 ml preset enables the assembly.
+    398 +- Preview reports two separate parts for body + handle.
+    399 +- Projection selector accepts body/both.
+    400 +- Raster upload works.
+    401 +- VTracer action performs a real trace and imports the SVG.
+    402 +- Row-design upload and assignment controls are reachable.
+    403 +- Bottom-logo upload increases the displayed part count to three.
+    404 +
+    405 +## Unresolved browser issue — highest-priority next task
+    406 +
+    407 +The final combined Playwright workflow did the following:
+    408 +
+    409 +1. Selected 600 ml preset.
+    410 +2. Selected projection target `both`.
+    411 +3. Enabled handle name `Gustavo`, bold font.
+    412 +4. Uploaded and VTracer-vectorized the roadmap screenshot.
+    413 +5. Uploaded the large app screenshot as an alternate row design.
+    414 +6. Assigned that design to row 2.
+    415 +7. Uploaded the roadmap screenshot as the independent bottom logo.
+    416 +8. UI displayed `Separate parts: 3`.
+    417 +9. Changed export format to 3MF.
+    418 +
+    419 +At step 9, the **Export 3MF** button remained disabled for the 30-second Playwright click timeout. The script
+          ended before capturing whether model status was still `generating` or had become `invalid`.
+    420 +
+    421 +This is the first thing Gemini should diagnose. Suggested approach:
+    422 +
+    423 +1. Reproduce with simpler generated artwork first (e.g. Brick), then add features one at a time.
+    424 +2. Wait explicitly for store/model status instead of using stale `Separate parts: 3` text.
+    425 +3. Capture the validation panel and any worker error.
+    426 +4. Test lowercase handle text (`Gustavo`) directly; the unit test currently uses uppercase `GUSTAVO`.
+    427 +5. Determine whether the very detailed screenshots merely make binary preview generation slow or whether one
+         combined shell becomes invalid.
+    428 +6. Add a browser/export regression after the cause is fixed.
+    429 +
+    430 +The relevant UI disabling condition is in `src/components/SettingsPanels.tsx`: export is disabled when status
+          is `invalid` or `exporting`; generation may also be racing with rapid setting changes.
+    431 +
+    432 +## Recommended next steps, in order
+    433 +
+    434 +1. Diagnose the disabled combined export described above.
+    435 +2. Add an end-to-end test for assembly STL ZIP output (entry names and binary STL headers).
+    436 +3. Add an end-to-end browser test for multi-object 3MF download.
+    437 +4. Confirm with the user whether “two molds” means body + handle or two physical mold halves.
+    438 +5. Confirm whether 600 ml / 1 L must be true hollow vessel capacities. If yes, implement a dedicated vessel/m
+         old kernel instead of treating them as external cylinder dimensions.
+    439 +6. Confirm whether the bottom insert needs a matching keyed recess in the body. Current behavior intentionall
+         y leaves the body untouched.
+    440 +7. Decide whether handle artwork/text must be true boolean-unioned geometry. Current overlapping closed-shell
+          approach is slicer-friendly but not a mathematical union.
+    441 +8. Consider embedding artwork in project files if projects need to be portable between computers.
+    442 +9. Consider lazy-loading fonts or moving typeface assets into separate worker chunks.
+    443 +10. Run the full tests/build again, review the large deletion list, then commit intentionally.
+    444 +
+    447 +```powershell
+    448 +cd F:\GustavoProject
+    451 +npm test
+    452 +npm run build
+    453 +
+    454 +# Dev server (a server is already listening on 4175 during this handoff)
+    463 +
+    464 +```powershell
+    465 +Stop-Process -Id 4556
+    466 +```
+    467 +
+    468 +## Worktree warning
+    469 +
+    470 +The worktree is intentionally very dirty and includes many tracked deletions from the proprietary Vector Magi
+         c runtime. Do not reset or discard changes. Review all changes before committing, especially:
+    471 +
+    472 +- obsolete Vector Magic deletions
+    473 +- new VTracer package and server bridge
+    474 +- new assembly geometry
+    475 +- new worker protocol
+    476 +- new persistence schema behavior
+    477 +- updated export semantics
+    478 +
+    479 +No unrelated user edits were present when this work began; the initial worktree was clean.
+
+• Model interrupted to submit steer instructions.
+
+
+› faster please, i need this hanhandoff
+
+
+• Context compacted
+
+• The handoff is already drafted—I’m doing one quick existence check, then I’ll give you the file.
+
+• Ran $f = 'F:\GustavoProject\GEMINI_HANDOFF.md'; Get-Item -LiteralPath $f | Select-Object FullName, Length,
+  │ LastWriteTime; Get-Content -LiteralPath $f -TotalCount 8
+  └
+    FullName                            Length LastWriteTime
+    … +11 lines (ctrl + t to view transcript)
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Handoff ready: GEMINI_HANDOFF.md
+
+  It covers all implementation changes, tests, architecture, deleted files, current worktree state, known limitations,
+  and Gemini’s recommended next steps. No commit was created.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+› R

@@ -96,6 +96,22 @@ describe('binary STL', () => {
 });
 
 describe('3MF', () => {
+  it('preserves separate assembly objects', async () => {
+    const exporter = new ThreeMFExporter();
+    const blob = await exporter.exportParts(
+      [
+        { id: 'body', name: 'Body', mesh },
+        { id: 'handle', name: 'Handle', mesh },
+      ],
+      { settings },
+    );
+    const xml = extractEntry(new Uint8Array(await blob.arrayBuffer()), '3D/3dmodel.model');
+    expect((xml.match(/<object /g) ?? []).length).toBe(2);
+    expect(xml).toContain('name="Body"');
+    expect(xml).toContain('name="Handle"');
+    expect(xml).toContain('<item objectid="2"/>');
+  });
+
   it('46: produces a real OPC zip, not a renamed STL', async () => {
     const blob = await new ThreeMFExporter().export(mesh, { settings });
     const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -150,7 +166,7 @@ describe('3MF', () => {
 describe('filenames', () => {
   it('103: are descriptive and sanitised', () => {
     expect(buildFilename(settings, 'stl')).toBe(
-      'gauchito_roller_50x100mm_bore8mm_depth2mm_4x8.stl',
+      'gauchito_roller_95x105mm_depth2mm_4x8.stl',
     );
   });
 

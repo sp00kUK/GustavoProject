@@ -1,7 +1,8 @@
 import { useI18n, type TranslationKey } from '../i18n';
 import { useStore } from '../state/store';
 import { DIMENSION_PRESETS, RELIEF_PRESETS } from '../state/defaults';
-import { maxSafeDepth, validateSettings } from '../geometry/constraints';
+import { maxSafeDepth, summarise, validateSettings } from '../geometry/constraints';
+import { tileSizeMm } from '../pattern/sampler';
 import { QUALITY_SPACING_MM } from '../geometry/quality';
 import {
   NumberField,
@@ -14,7 +15,10 @@ import {
 import type {
   ExportFormat,
   ExportOrientation,
+  ExportScope,
+  HandleFont,
   PatternMode,
+  ProjectionTarget,
   QualityPreset,
   ReliefDirection,
   StaggerMode,
@@ -25,10 +29,12 @@ import type {
  * Cylinder
  * ==================================================================== */
 
-export function CylinderSection() {
+export function BaseMeshSection() {
   const { t } = useI18n();
+  const baseMesh = useStore((s) => s.settings.baseMesh);
   const cylinder = useStore((s) => s.settings.cylinder);
-  const update = useStore((s) => s.updateCylinder);
+  const updateCylinder = useStore((s) => s.updateCylinder);
+  const importMesh = useStore((s) => s.importMesh);
   const replace = useStore((s) => s.replaceSettings);
   const settings = useStore((s) => s.settings);
 
@@ -38,62 +44,239 @@ export function CylinderSection() {
         p.cylinder.diameter === cylinder.diameter &&
         p.cylinder.height === cylinder.height &&
         p.cylinder.boreEnabled === cylinder.boreEnabled &&
-        p.cylinder.boreDiameter === cylinder.boreDiameter,
+        p.cylinder.boreDiameter === cylinder.boreDiameter &&
+        (p.assembly?.enabled === undefined || p.assembly.enabled === settings.assembly.enabled),
     )?.id ?? 'custom';
 
   return (
-    <Section title={t('section.cylinder')}>
-      <SelectField
-        label={t('field.preset')}
-        value={activePreset}
-        options={[
-          { value: 'custom', label: t('preset.customLabel') },
-          ...DIMENSION_PRESETS.map((p) => ({
-            value: p.id,
-            label: t(p.labelKey as 'preset.smallTerrain'),
-          })),
-        ]}
-        onChange={(id) => {
-          const preset = DIMENSION_PRESETS.find((p) => p.id === id);
-          if (preset) replace({ ...settings, cylinder: { ...preset.cylinder } });
-        }}
-      />
-      <NumberField
-        label={t('field.diameter')}
-        value={cylinder.diameter}
-        onChange={(diameter) => update({ diameter })}
-        min={1}
-        max={1000}
-        step={1}
-        unit={t('units.mm')}
-        hint={t('tooltip.diameter')}
-      />
-      <NumberField
-        label={t('field.height')}
-        value={cylinder.height}
-        onChange={(height) => update({ height })}
-        min={1}
-        max={1000}
-        step={1}
-        unit={t('units.mm')}
-        hint={t('tooltip.height')}
-      />
+    <Section title={t('section.cylinder') || 'Base Mesh'}>
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+        <label>
+          <input 
+            type="radio" 
+            checked={baseMesh.type === 'cylinder'} 
+            onChange={() => useStore.getState().updateBaseMesh({ type: 'cylinder' })} 
+          /> Parametric Cylinder
+        </label>
+        <label>
+          <input 
+            type="radio" 
+            checked={baseMesh.type === 'imported'} 
+            onChange={() => useStore.getState().updateBaseMesh({ type: 'imported', meshId: 'dummy', filename: 'dummy.stl', orientationMatrix: [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1] })} 
+          /> Imported Mesh
+        </label>
+      </div>
+
+      {baseMesh.type === 'cylinder' && (
+        <>
+          <SelectField
+            label={t('field.preset')}
+            value={activePreset}
+            options={[
+              { value: 'custom', label: t('preset.customLabel') },
+              ...DIMENSION_PRESETS.map((p) => ({
+                value: p.id,
+                label: t(p.labelKey as 'preset.smallTerrain'),
+              })),
+            ]}
+            onChange={(id) => {
+              const preset = DIMENSION_PRESETS.find((p) => p.id === id);
+              if (preset) {
+                replace({
+                  ...settings,
+                  baseMesh: { type: 'cylinder', ...preset.cylinder },
+                  cylinder: { ...preset.cylinder },
+                  assembly: preset.assembly
+                    ? { ...settings.assembly, ...preset.assembly }
+                    : settings.assembly,
+                });
+              }
+            }}
+          />
+          <NumberField
+            label={t('field.diameter')}
+            value={cylinder.diameter}
+            onChange={(diameter) => { updateCylinder({ diameter }); useStore.getState().updateBaseMesh({ diameter } as any); }}
+            min={1}
+            max={1000}
+            step={1}
+            unit={t('units.mm')}
+            hint={t('tooltip.diameter')}
+          />
+          <NumberField
+            label={t('field.height')}
+            value={cylinder.height}
+            onChange={(height) => { updateCylinder({ height }); useStore.getState().updateBaseMesh({ height } as any); }}
+            min={1}
+            max={1000}
+            step={1}
+            unit={t('units.mm')}
+            hint={t('tooltip.height')}
+          />
+          <Toggle
+            label={t('field.boreEnabled')}
+            checked={cylinder.boreEnabled}
+            onChange={(boreEnabled) => { updateCylinder({ boreEnabled }); useStore.getState().updateBaseMesh({ boreEnabled } as any); }}
+            hint={t('tooltip.bore')}
+          />
+          <NumberField
+            label={t('field.boreDiameter')}
+            value={cylinder.boreDiameter}
+            onChange={(boreDiameter) => { updateCylinder({ boreDiameter }); useStore.getState().updateBaseMesh({ boreDiameter } as any); }}
+            min={0.5}
+            max={Math.max(1, cylinder.diameter - 1)}
+            step={0.5}
+            unit={t('units.mm')}
+            disabled={!cylinder.boreEnabled}
+          />
+        </>
+      )}
+
+      {baseMesh.type === 'imported' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div><strong>Current Mesh:</strong> {baseMesh.filename}</div>
+          <input
+            type="file"
+            accept=".stl,.obj,.3mf"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              try {
+                // Generate a unique ID (e.g. timestamp or uuid)
+                const meshId = `mesh_${Date.now()}`;
+                
+                useStore.getState().setError(null);
+                
+                const { parseMeshFile } = await import('../geometry/mesh/importEngine');
+                const mesh = await parseMeshFile(file);
+                
+                const { saveImportedMesh } = await import('../state/persistence');
+                await saveImportedMesh(meshId, mesh);
+                
+                importMesh(meshId, file.name);
+              } catch (err) {
+                useStore.getState().setError({ title: 'Import Failed', message: String(err) });
+              }
+              e.target.value = '';
+            }}
+          />
+        </div>
+      )}
+    </Section>
+  );
+}
+
+/* ==================================================================== *
+ * Separate mold body / handle assembly
+ * ==================================================================== */
+
+export function AssemblySection() {
+  const { t } = useI18n();
+  const assembly = useStore((s) => s.settings.assembly);
+  const handleName = useStore((s) => s.settings.handleName);
+  const update = useStore((s) => s.updateAssembly);
+  const updateName = useStore((s) => s.updateHandleName);
+
+  return (
+    <Section title={t('section.assembly')}>
       <Toggle
-        label={t('field.boreEnabled')}
-        checked={cylinder.boreEnabled}
-        onChange={(boreEnabled) => update({ boreEnabled })}
-        hint={t('tooltip.bore')}
+        label={t('field.assemblyEnabled')}
+        checked={assembly.enabled}
+        onChange={(enabled) => update({ enabled })}
+        hint={t('tooltip.assembly')}
+      />
+      <SelectField<ProjectionTarget>
+        label={t('field.projectionTarget')}
+        value={assembly.projectionTarget}
+        options={[
+          { value: 'body', label: t('option.targetBody') },
+          { value: 'handle', label: t('option.targetHandle') },
+          { value: 'both', label: t('option.targetBoth') },
+        ]}
+        onChange={(projectionTarget) => update({ projectionTarget })}
+        disabled={!assembly.enabled}
+        hint={t('tooltip.projectionTarget')}
       />
       <NumberField
-        label={t('field.boreDiameter')}
-        value={cylinder.boreDiameter}
-        onChange={(boreDiameter) => update({ boreDiameter })}
-        min={0.5}
-        max={Math.max(1, cylinder.diameter - 1)}
+        label={t('field.handleExtension')}
+        value={assembly.handleExtension}
+        onChange={(handleExtension) => update({ handleExtension })}
+        min={8}
+        max={200}
         step={0.5}
         unit={t('units.mm')}
-        disabled={!cylinder.boreEnabled}
+        disabled={!assembly.enabled}
       />
+      <NumberField
+        label={t('field.handleBarWidth')}
+        value={assembly.handleBarWidth}
+        onChange={(handleBarWidth) => update({ handleBarWidth })}
+        min={2}
+        max={60}
+        step={0.5}
+        unit={t('units.mm')}
+        disabled={!assembly.enabled}
+      />
+      <NumberField
+        label={t('field.handleDepth')}
+        value={assembly.handleDepth}
+        onChange={(handleDepth) => update({ handleDepth })}
+        min={2}
+        max={80}
+        step={0.5}
+        unit={t('units.mm')}
+        disabled={!assembly.enabled}
+      />
+      <NumberField
+        label={t('field.partGap')}
+        value={assembly.partGap}
+        onChange={(partGap) => update({ partGap })}
+        min={0.05}
+        max={10}
+        step={0.05}
+        unit={t('units.mm')}
+        disabled={!assembly.enabled}
+      />
+
+      <Section title={t('section.handleName')} defaultOpen={false}>
+        <Toggle
+          label={t('field.handleNameEnabled')}
+          checked={handleName.enabled}
+          onChange={(enabled) => updateName({ enabled })}
+          disabled={!assembly.enabled}
+        />
+        <label className="field">
+          <span className="field-label">{t('field.handleNameText')}</span>
+          <input
+            type="text"
+            value={handleName.text}
+            maxLength={24}
+            disabled={!assembly.enabled || !handleName.enabled}
+            onChange={(event) => updateName({ text: event.target.value })}
+          />
+        </label>
+        <SelectField<HandleFont>
+          label={t('field.handleFont')}
+          value={handleName.font}
+          options={[
+            { value: 'modern', label: t('option.fontModern') },
+            { value: 'bold', label: t('option.fontBold') },
+            { value: 'classic', label: t('option.fontClassic') },
+          ]}
+          onChange={(font) => updateName({ font })}
+          disabled={!assembly.enabled || !handleName.enabled}
+        />
+        <NumberField
+          label={t('field.handleNameDepth')}
+          value={handleName.depth}
+          onChange={(depth) => updateName({ depth })}
+          min={0.2}
+          max={4}
+          step={0.1}
+          unit={t('units.mm')}
+          disabled={!assembly.enabled || !handleName.enabled}
+        />
+      </Section>
     </Section>
   );
 }
@@ -103,12 +286,35 @@ export function CylinderSection() {
  * ==================================================================== */
 
 export function RepeatSection() {
-  const { t } = useI18n();
+  const { t, n } = useI18n();
   const pattern = useStore((s) => s.settings.pattern);
+  const cylinder = useStore((s) => s.settings.cylinder);
+  const relief = useStore((s) => s.settings.relief);
   const update = useStore((s) => s.updatePattern);
+
+  const s = summarise(cylinder, relief);
+  const tile = tileSizeMm(s.circumference, s.usableHeight, pattern.columns, pattern.rows);
 
   return (
     <Section title={t('section.repeat')}>
+      <div
+        className="stat-badge-row"
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '10px',
+          padding: '6px 10px',
+          background: 'rgba(255, 255, 255, 0.04)',
+          borderRadius: '4px',
+          border: '1px solid rgba(255, 255, 255, 0.06)',
+        }}
+      >
+        <span className="muted small">{t('summary.tileSize')}:</span>
+        <strong className="font-mono" style={{ fontSize: '12px' }}>
+          {n(tile.width, 1)} × {n(tile.height, 1)} {t('units.mm')}
+        </strong>
+      </div>
       <NumberField
         label={t('field.columns')}
         value={pattern.columns}
@@ -448,6 +654,10 @@ export function ExportSection({ onExport }: { onExport: () => void }) {
   const status = useStore((s) => s.status);
   const mode = useStore((s) => s.settings.pattern.mode);
   const updatePattern = useStore((s) => s.updatePattern);
+  const assemblyEnabled = useStore((s) => s.settings.assembly.enabled);
+  const bottomLogoEnabled = useStore(
+    (s) => s.settings.bottomLogo.enabled && s.bottomLogoPattern !== null,
+  );
 
   return (
     <Section title={t('section.export')}>
@@ -469,6 +679,21 @@ export function ExportSection({ onExport }: { onExport: () => void }) {
           { value: '3mf', label: '3MF' },
         ]}
         onChange={(format) => update({ format })}
+      />
+      <SelectField<ExportScope>
+        label={t('field.exportScope')}
+        value={exportSettings.scope}
+        options={[
+          { value: 'assembly', label: t('option.scopeAssembly') },
+          { value: 'body', label: t('option.scopeBody') },
+          ...(assemblyEnabled
+            ? [{ value: 'handle' as const, label: t('option.scopeHandle') }]
+            : []),
+          ...(bottomLogoEnabled
+            ? [{ value: 'bottomLogo' as const, label: t('option.scopeBottomLogo') }]
+            : []),
+        ]}
+        onChange={(scope) => update({ scope })}
       />
       <SelectField<ExportOrientation>
         label={t('field.orientation')}

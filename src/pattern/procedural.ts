@@ -142,6 +142,42 @@ export const EXAMPLE_PATTERNS: ExamplePattern[] = [
     description: 'Smooth sinusoidal heightmap for grayscale mode.',
     build: (s = 512) => makeRaw('wave', 'Wave Relief', s, s, waveField),
   },
+  {
+    id: 'carbon',
+    label: 'Carbon Fiber',
+    description: 'Diagonal twill weave pattern.',
+    build: (s = 512) => makeRaw('carbon', 'Carbon Fiber', s, s, carbonField),
+  },
+  {
+    id: 'weave',
+    label: 'Basket Weave',
+    description: 'Interwoven strap relief pattern.',
+    build: (s = 512) => makeRaw('weave', 'Basket Weave', s, s, weaveField),
+  },
+  {
+    id: 'leather',
+    label: 'Leather Grain',
+    description: 'Fine organic pebbled skin texture.',
+    build: (s = 512) => makeRaw('leather', 'Leather Grain', s, s, leatherField),
+  },
+  {
+    id: 'wood',
+    label: 'Wood Grain',
+    description: 'Natural organic tree ring contour waves.',
+    build: (s = 512) => makeRaw('wood', 'Wood Grain', s, s, woodField),
+  },
+  {
+    id: 'stripes',
+    label: 'Fluted Stripes',
+    description: 'Vertical ribbed fluting and fluted channels.',
+    build: (s = 512) => makeRaw('stripes', 'Fluted Stripes', s, s, stripesField),
+  },
+  {
+    id: 'dots',
+    label: 'Dimpled Dots',
+    description: 'Perforated grip dimples.',
+    build: (s = 512) => makeRaw('dots', 'Dimpled Dots', s, s, dotsField),
+  },
 ];
 
 /** `field(x, y, size)` returns luminance 0..1; 0 is carved by default. */
@@ -294,6 +330,56 @@ function waveField(u: number, v: number): number {
     Math.sin(u * Math.PI * 2) * Math.sin(v * Math.PI * 2) * 0.5 +
     Math.sin(u * Math.PI * 4 + 1.1) * Math.sin(v * Math.PI * 4 - 0.4) * 0.25;
   return 0.5 + s * 0.5;
+}
+
+function carbonField(u: number, v: number): number {
+  const n = 12;
+  const su = fract(u * n);
+  const sv = fract(v * n);
+  const block = (Math.floor(u * n) + Math.floor(v * n)) & 1;
+  const strand = block ? su : sv;
+  const gradient = Math.sin(strand * Math.PI);
+  return 0.25 + 0.75 * gradient;
+}
+
+function weaveField(u: number, v: number): number {
+  const n = 8;
+  const gu = fract(u * n);
+  const gv = fract(v * n);
+  const bu = Math.floor(u * n);
+  const bv = Math.floor(v * n);
+  const isHorizontal = (bu + bv) & 1;
+  const edge = isHorizontal ? Math.sin(gv * Math.PI) : Math.sin(gu * Math.PI);
+  const gap = isHorizontal ? Math.abs(gu - 0.5) : Math.abs(gv - 0.5);
+  return gap > 0.44 ? 0.1 : clamp01(edge * (1 - gap * 0.6));
+}
+
+function leatherField(u: number, v: number): number {
+  const s1 = Math.sin(u * 50 + Math.cos(v * 45) * 3) * Math.cos(v * 50);
+  const s2 = Math.sin(u * 100 - v * 80) * 0.5;
+  const noise = (s1 + s2) * 0.5;
+  return 0.5 + noise * 0.45;
+}
+
+function woodField(u: number, v: number): number {
+  const cx = 0.5 + Math.sin(v * Math.PI * 2) * 0.15;
+  const dist = Math.hypot(u - cx, v * 0.6);
+  const ring = Math.sin(dist * 60 + Math.sin(u * 20) * 2);
+  return 0.5 + ring * 0.45;
+}
+
+function stripesField(u: number, _v: number): number {
+  const n = 16;
+  const s = Math.sin(u * Math.PI * 2 * n);
+  return 0.5 + s * 0.5;
+}
+
+function dotsField(u: number, v: number): number {
+  const n = 10;
+  const du = fract(u * n) - 0.5;
+  const dv = fract(v * n) - 0.5;
+  const r = Math.hypot(du, dv);
+  return r < 0.32 ? clamp01(r / 0.32) : 1;
 }
 
 /* -- helpers ---------------------------------------------------------- */

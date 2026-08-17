@@ -73,10 +73,11 @@ export function processPattern(
   // 5. Soft edges. Deliberately after thresholding: the shape is decided by
   //    the threshold, the softness only rounds how it meets the surface.
   let resultBinary = binary;
-  if (softenPx > 0) {
+  const effectiveSoften = Math.max(softenPx, settings.blur || 0);
+  if (effectiveSoften > 0) {
     const f = new Float32Array(n);
     for (let i = 0; i < n; i++) f[i] = mask[i] / 255;
-    boxBlur(f, width, height, softenPx);
+    boxBlur(f, width, height, effectiveSoften);
     for (let i = 0; i < n; i++) mask[i] = Math.round(clamp01(f[i]) * 255);
     resultBinary = false;
   }

@@ -20,6 +20,7 @@ export interface GenerateOptions {
   purpose: JobPurpose;
   settings: ProjectSettings;
   patternId: string | null;
+  bottomLogoPatternId?: string | null;
   filename?: string;
   onProgress?: (progress: JobProgress) => void;
 }
@@ -48,7 +49,7 @@ export class MeshWorkerClient {
   private worker: Worker | null = null;
   private nextJobId = 1;
   private activeJobId = 0;
-  private pattern: RawPattern | null = null;
+  private patterns: RawPattern[] = [];
 
   private handlers = new Map<
     number,
@@ -72,7 +73,7 @@ export class MeshWorkerClient {
       this.handlers.clear();
     };
     this.worker = worker;
-    if (this.pattern) this.uploadPattern(worker, this.pattern);
+    if (this.patterns.length) this.uploadPatterns(worker, this.patterns);
     return worker;
   }
 
@@ -102,25 +103,32 @@ export class MeshWorkerClient {
     }
   }
 
-  setPattern(pattern: RawPattern | null): void {
-    this.pattern = pattern;
+  setPatterns(patterns: RawPattern[]): void {
+    this.patterns = patterns;
     const worker = this.worker;
     if (!worker) return;
-    if (!pattern) {
-      worker.postMessage({ type: 'CLEAR_PATTERN' } satisfies WorkerRequest);
+    if (patterns.length === 0) {
+      worker.postMessage({ type: 'CLEAR_PATTERNS' } satisfies WorkerRequest);
       return;
     }
-    this.uploadPattern(worker, pattern);
+    this.uploadPatterns(worker, patterns);
   }
 
-  private uploadPattern(worker: Worker, pattern: RawPattern): void {
+  /** Backwards-compatible convenience for callers with one primary pattern. */
+  setPattern(pattern: RawPattern | null): void {
+    this.setPatterns(pattern ? [pattern] : []);
+  }
+
+  private uploadPatterns(worker: Worker, patterns: RawPattern[]): void {
     // Copy rather than transfer: the main thread keeps the same buffers for the
     // 2D pattern preview, and a re-seed after cancellation needs them again.
-    const luminance = pattern.luminance.slice().buffer;
-    const alpha = pattern.alpha ? pattern.alpha.slice().buffer : null;
-    const message: WorkerRequest = {
-      type: 'SET_PATTERN',
-      pattern: {
+    const transfer: ArrayBuffer[] = [];
+    const payloads = patterns.map((pattern) => {
+      const luminance = pattern.luminance.slice().buffer;
+      const alpha = pattern.alpha ? pattern.alpha.slice().buffer : null;
+      transfer.push(luminance);
+      if (alpha) transfer.push(alpha);
+      return {
         id: pattern.id,
         name: pattern.name,
         kind: pattern.kind,
@@ -130,9 +138,13 @@ export class MeshWorkerClient {
         originalHeight: pattern.originalHeight,
         luminance,
         alpha,
-      },
+      };
+    });
+    const message: WorkerRequest = {
+      type: 'SET_PATTERNS',
+      patterns: payloads,
     };
-    worker.postMessage(message, alpha ? [luminance, alpha] : [luminance]);
+    worker.postMessage(message, transfer);
   }
 
   generate(options: GenerateOptions): Promise<MeshResult | FileResult> {
@@ -148,6 +160,7 @@ export class MeshWorkerClient {
         purpose: options.purpose,
         settings: options.settings,
         patternId: options.patternId,
+        bottomLogoPatternId: options.bottomLogoPatternId ?? null,
         filename: options.filename,
       };
       worker.postMessage(message);
@@ -166,7 +179,7 @@ export class MeshWorkerClient {
 
   dispose(): void {
     this.cancel();
-    this.pattern = null;
+    this.patterns = [];
   }
 }
 

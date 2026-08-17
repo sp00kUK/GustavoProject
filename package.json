@@ -1,7 +1,7 @@
 {
   "name": "cylindrical-pattern-debosser",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Parametric Cylindrical Pattern Generator & Debosser - turn 2D artwork into printable cylindrical negative relief",
   "scripts": {
@@ -14,6 +14,7 @@
     "fixtures": "tsx scripts/geometryProof.ts"
   },
   "dependencies": {
+    "@visioncortex/vtracer": "^1.0.0-alpha.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "three": "^0.181.0",

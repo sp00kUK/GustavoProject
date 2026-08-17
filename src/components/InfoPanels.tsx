@@ -62,6 +62,10 @@ export function SummaryPanel() {
       />
       <StatRow label={t('summary.bounds')} value={bounds} />
       <StatRow
+        label={t('summary.parts')}
+        value={preview ? n(preview.partIds.length, 0) : t('summary.none')}
+      />
+      <StatRow
         label={t('summary.vertices')}
         value={preview ? n(preview.stats.vertexCount, 0) : t('summary.none')}
       />

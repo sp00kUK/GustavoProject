@@ -59,8 +59,8 @@ describe('mask convention', () => {
 
   it('6: the threshold slider moves the cut point', () => {
     const raw = grayPattern([100], 1, 1);
-    expect(processPattern(raw, settings({ threshold: 0.2 })).mask[0]).toBe(0);
-    expect(processPattern(raw, settings({ threshold: 0.9 })).mask[0]).toBe(255);
+    expect(processPattern(raw, settings({ mode: 'binary', threshold: 0.2 })).mask[0]).toBe(0);
+    expect(processPattern(raw, settings({ mode: 'binary', threshold: 0.9 })).mask[0]).toBe(255);
   });
 
   it('57: transparent pixels read as untouched, not as deep carving', () => {

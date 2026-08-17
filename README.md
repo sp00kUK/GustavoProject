@@ -2,7 +2,7 @@
 
 Convierte arte 2D en relieves cilíndricos negativos imprimibles en 3D — rodillos de textura para escenografía y wargames, rodillos de arcilla y cerámica, sellos, empuñaduras y moldes cilíndricos.
 
-La generación geométrica se ejecuta directamente en el navegador. La integración opcional con Vector Magic usa una copia local licenciada de la aplicación Desktop en el mismo equipo; no sube el diseño a servidores externos.
+La geometría se genera en un Web Worker del navegador. La vectorización usa el motor abierto VTracer mediante WebAssembly en el servidor local de Vite; no requiere una aplicación licenciada, automatización de ventanas ni subida del diseño a la nube.
 
 ---
 
@@ -104,20 +104,21 @@ Para evitar discontinuidades donde el grabado llega a los extremos superior o in
 ### Orificio Central / Eje (`bore.ts`)
 Geometría cilíndrica interior real (no una sustracción booleana). Las normales apuntan hacia el eje central ("hacia afuera del material"), garantizando compatibilidad total con laminadores 3D.
 
-### Vectorización con Vector Magic Desktop real
+### Vectorización abierta con VTracer
 
-El proyecto no incluye ni presenta un trazador casero como si fuera Vector Magic. El botón **Vectorizar automáticamente con Vector Magic** realiza un flujo local con el producto original:
+El botón **Vectorizar con VTracer** llama al paquete oficial `@visioncortex/vtracer` (MIT/Apache-2.0). El trazado y la decodificación de imagen se ejecutan localmente con WebAssembly y producen un SVG que vuelve a pasar por el cargador seguro de la aplicación. Hay perfiles para logos, dibujos/escaneos con iluminación desigual y arte en color. Todos aplican filtrado de motas, curvas spline, simplificación y optimización SVG.
 
-1. Conserva y entrega los bytes originales del PNG/JPG a `vmde.exe`.
-2. Ejecuta la instalación licenciada de Vector Magic Desktop oculta y selecciona **Fully Automatic**.
-3. Completa automáticamente la revisión, selecciona explícitamente el exportador SVG y guarda el resultado en una carpeta temporal aislada.
-4. Muestra únicamente una barra de progreso en la interfaz e importa automáticamente ese SVG real como la nueva fuente del patrón.
+Consulta [docs/VECTORIZER.md](docs/VECTORIZER.md) para el flujo y los parámetros exactos.
 
-La búsqueda se realiza en este orden: `VECTOR_MAGIC_EXE`, `vendor/vector-magic/vmde.exe`, `C:\Program Files (x86)\Vector Magic\vmde.exe` y `C:\Program Files\Vector Magic\vmde.exe`. Vector Magic debe estar cerrado antes de comenzar porque Desktop usa una sola instancia.
+### Conjunto de molde y piezas independientes
 
-`vendor/vector-magic/` sirve como copia local junto al repositorio, pero está ignorada por Git y no se incluye en `dist/`. La licencia incluida de Vector Magic no concede derechos de redistribución del programa; no fuerces esos binarios al historial remoto sin autorización expresa del titular.
-
-Consulta [docs/VECTORIZER_HANDOFF.md](docs/VECTORIZER_HANDOFF.md) para el contrato exacto del puente local y sus limitaciones.
+- Los preajustes **600 ml** y **1 L** aplican dimensiones de capacidad práctica y activan un asa alineada.
+- Cuerpo y asa son objetos cerrados separados; no se sueldan ni se fusionan mediante booleanas.
+- La imagen principal puede proyectarse sobre el cuerpo, sobre una placa de relieve cerrada del asa o sobre ambos.
+- Un nombre de hasta 24 caracteres puede colocarse verticalmente en el asa con fuentes Moderna, Negrita o Clásica.
+- El logo inferior usa una segunda imagen y genera un inserto/sello circular con STL propio; el cuerpo queda intacto.
+- Cada fila repetida puede usar el diseño principal o cualquier imagen de la biblioteca de filas.
+- Un conjunto STL se entrega como ZIP con un STL por objeto. 3MF conserva todos los objetos y su posición de montaje en un único paquete.
 
 ---
 
@@ -179,6 +180,7 @@ src/
   geometry/       Kernel de geometría puro (sin dependencias de React, Three.js o DOM)
     mesh/           MeshBuilder (indexación entera de vértices), operaciones de malla
     cylinder/       Tapas terminales y orificio interior
+    assembly/       Asa separada, nombre, placa de proyección e inserto de logo inferior
     relief/         Generadores binario y continuo, campo de relieve
     validation/     Auditoría geométrica manifold
     normals/        Cálculo de normales con detección de aristas vivas (creased normals)
@@ -192,7 +194,7 @@ src/
   components/     Paneles de control, configuración, información y diálogos
   i18n/           Diccionarios en Español e Inglés
 server/
-  vectorMagicBridge.ts  Puente local restringido a loopback para la aplicación Desktop real
+  vtracerBridge.ts  Endpoint local para el motor abierto VTracer WASM
 ```
 
 ---

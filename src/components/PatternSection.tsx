@@ -1,62 +1,64 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
 import { useStore } from '../state/store';
-import { EXAMPLE_PATTERNS } from '../pattern/procedural';
 import { processPattern } from '../pattern/process';
 import { isAcceptedFile, loadPatternFile, MAX_SOURCE_DIMENSION } from '../pattern/loaders';
-import {
-  cancelVectorMagicSession,
-  getVectorMagicResult,
-  startVectorMagicDesktop,
-  type VectorMagicAutomationState,
-} from '../pattern/vectorMagicDesktop';
-import { summarise } from '../geometry/constraints';
-import { tileSizeMm } from '../pattern/sampler';
-import { NumberField, Section, Segmented, SliderField, Toggle } from './controls';
+import { vectorizeWithVTracer } from '../pattern/openSourceVectorizer';
+import { Section, Segmented, SliderField } from './controls';
 import type { RawPattern } from '../pattern/types';
 
 type PreviewMode = 'original' | 'processed' | 'tiled';
 
 export function PatternSection() {
-  const { t, n } = useI18n();
-  const pattern = useStore((s) => s.pattern);
-  const settings = useStore((s) => s.settings);
-  const patternSettings = settings.pattern;
-  const update = useStore((s) => s.updatePattern);
+  const { t } = useI18n();
+  const primaryPattern = useStore((s) => s.pattern);
+  const rowPatterns = useStore((s) => s.rowPatterns);
+  const operationPatterns = useStore((s) => s.operationPatterns);
+  const addRowPatterns = useStore((s) => s.addRowPatterns);
   const setPatternSource = useStore((s) => s.setPatternSource);
   const setError = useStore((s) => s.setError);
   const seams = useStore((s) => s.patternSeams);
   const notice = useStore((s) => s.patternNotice);
 
+  const [selectedArtworkId, setSelectedArtworkId] = useState<string>('primary');
   const [previewMode, setPreviewMode] = useState<PreviewMode>('processed');
   const [dragging, setDragging] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [vmProgress, setVmProgress] = useState<number | null>(null);
-  const [vmStage, setVmStage] = useState<VectorMagicAutomationState | null>(null);
-  const [vmStatus, setVmStatus] = useState<string | null>(null);
-  const vmAbortRef = useRef<AbortController | null>(null);
-  const vmSessionRef = useRef<string | null>(null);
 
-  const cancelVectorMagic = useCallback(() => {
-    const sessionId = vmSessionRef.current;
-    vmSessionRef.current = null;
-    if (sessionId) {
-      void cancelVectorMagicSession(sessionId).catch(() => {
-        // The helper may already have completed and closed between UI events.
-      });
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [vectorProgress, setVectorProgress] = useState<number | null>(null);
+  const vectorAbortRef = useRef<AbortController | null>(null);
+
+  // Combine all available artworks into a list
+  const allArtworks = useMemo(() => {
+    const map = new Map<string, RawPattern>();
+    if (primaryPattern) map.set('primary', primaryPattern);
+    for (const p of rowPatterns) {
+      if (!map.has(p.id)) map.set(p.id, p);
     }
-    vmAbortRef.current?.abort();
-    vmAbortRef.current = null;
-    setVmProgress(null);
-    setVmStage(null);
-    setVmStatus(null);
+    for (const [id, p] of Object.entries(operationPatterns)) {
+      if (!map.has(id)) map.set(id, p);
+    }
+    return Array.from(map.entries()).map(([id, pat]) => ({ id, pattern: pat }));
+  }, [primaryPattern, rowPatterns, operationPatterns]);
+
+  // Current active inspected artwork
+  const currentArtwork = useMemo(() => {
+    if (selectedArtworkId === 'primary') return primaryPattern;
+    const found = allArtworks.find((a) => a.id === selectedArtworkId);
+    return found?.pattern || primaryPattern;
+  }, [selectedArtworkId, allArtworks, primaryPattern]);
+
+  const cancelVectorizer = useCallback(() => {
+    vectorAbortRef.current?.abort();
+    vectorAbortRef.current = null;
+    setVectorProgress(null);
   }, []);
 
   const handleFiles = useCallback(
     async (files: FileList | null) => {
       const file = files?.[0];
       if (!file) return;
-      cancelVectorMagic();
+      cancelVectorizer();
       if (!isAcceptedFile(file)) {
         setError({
           title: t('error.title'),
@@ -73,7 +75,15 @@ export function PatternSection() {
               target: MAX_SOURCE_DIMENSION,
             })
           : null;
-        setPatternSource(result.pattern, message);
+
+        // If no primary exists, set as primary; otherwise add to logo library
+        if (!primaryPattern) {
+          setPatternSource(result.pattern, message);
+          setSelectedArtworkId('primary');
+        } else {
+          addRowPatterns([result.pattern]);
+          setSelectedArtworkId(result.pattern.id);
+        }
       } catch (error) {
         const code = (error as Error).message;
         setError({
@@ -85,178 +95,178 @@ export function PatternSection() {
         });
       }
     },
-    [cancelVectorMagic, setError, setPatternSource, t],
-  );
-
-  const summary = summarise(settings.cylinder, settings.relief);
-  const tile = tileSizeMm(
-    summary.circumference,
-    summary.usableHeight,
-    patternSettings.columns,
-    patternSettings.rows,
+    [cancelVectorizer, setError, setPatternSource, primaryPattern, addRowPatterns, t],
   );
 
   const lowResolution =
-    pattern !== null && Math.min(pattern.width, pattern.height) < 128;
+    currentArtwork !== null && Math.min(currentArtwork.width, currentArtwork.height) < 128;
   const seamWarning = seams !== null && Math.max(seams.horizontal, seams.vertical) > 0.25;
 
   useEffect(
     () => () => {
-      vmAbortRef.current?.abort();
-      const sessionId = vmSessionRef.current;
-      if (sessionId) void cancelVectorMagicSession(sessionId).catch(() => undefined);
+      vectorAbortRef.current?.abort();
     },
     [],
   );
 
-  const openInVectorMagic = useCallback(async () => {
-    if (!pattern) return;
-    cancelVectorMagic();
+  const runVectorizer = useCallback(async () => {
+    if (!currentArtwork) return;
+    cancelVectorizer();
     const controller = new AbortController();
-    vmAbortRef.current = controller;
-    setVmProgress(0.01);
-    setVmStage('launching');
-    setVmStatus(null);
+    vectorAbortRef.current = controller;
+    setVectorProgress(0.2);
     try {
-      const session = await startVectorMagicDesktop(pattern, controller.signal);
-      vmSessionRef.current = session.sessionId;
-
-      while (!controller.signal.aborted) {
-        const result = await getVectorMagicResult(session.sessionId, controller.signal);
-        setVmProgress(result.progress);
-        setVmStage(result.state);
-        if (!result.ready) {
-          await abortableDelay(250, controller.signal);
-          continue;
-        }
-
-        const file = new File([result.svg], result.filename, {
-          type: 'image/svg+xml',
-          lastModified: Date.now(),
-        });
-        const loaded = await loadPatternFile(file, MAX_SOURCE_DIMENSION);
-        if (controller.signal.aborted) return;
-        setPatternSource(loaded.pattern, t('pattern.vectorMagicImported'));
-        setPreviewMode('processed');
-        setVmStatus(t('pattern.vectorMagicImported'));
-        return;
+      const result = await vectorizeWithVTracer(
+        currentArtwork,
+        'logo',
+        128,
+        controller.signal,
+      );
+      const svgFile = new File([result.svg], result.filename, { type: 'image/svg+xml' });
+      const loaded = await loadPatternFile(svgFile, MAX_SOURCE_DIMENSION);
+      setVectorProgress(null);
+      if (selectedArtworkId === 'primary') {
+        setPatternSource(loaded.pattern, t('pattern.vectorizerImported'));
+      } else {
+        addRowPatterns([loaded.pattern]);
+        setSelectedArtworkId(loaded.pattern.id);
       }
     } catch (error) {
-      if (controller.signal.aborted) return;
-      const code = error instanceof Error ? error.message : String(error);
-      setVmStatus(
-        code === 'VECTOR_MAGIC_NOT_INSTALLED'
-          ? t('error.vectorMagicNotInstalled')
-          : code === 'VECTOR_MAGIC_ALREADY_RUNNING' || code === 'VECTOR_MAGIC_BUSY'
-            ? t('error.vectorMagicAlreadyRunning')
-          : t('error.vectorMagicBridge', { message: code }),
-      );
-    } finally {
-      if (vmAbortRef.current === controller) {
-        vmAbortRef.current = null;
-        vmSessionRef.current = null;
-        setVmProgress(null);
-        setVmStage(null);
-      }
+      if ((error as Error).name === 'AbortError') return;
+      setVectorProgress(null);
+      setError({
+        title: t('error.title'),
+        message: (error as Error).message || t('error.decodeFailed'),
+      });
     }
-  }, [cancelVectorMagic, pattern, setPatternSource, t]);
+  }, [cancelVectorizer, currentArtwork, selectedArtworkId, setPatternSource, addRowPatterns, setError, t]);
 
   return (
-    <Section title={t('section.pattern')}>
+    <Section title={t('pattern.logosTextures')}>
+      <input
+        ref={inputRef}
+        type="file"
+        hidden
+        accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml"
+        onChange={(event) => {
+          void handleFiles(event.target.files);
+          event.target.value = '';
+        }}
+      />
+
+      {/* Upload Zone */}
       <div
-        className={`dropzone ${dragging ? 'dragging' : ''}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragging(false);
-          void handleFiles(e.dataTransfer.files);
-        }}
+        className={`dropzone ${dragging ? 'drag-over' : ''}`}
+        role="button"
+        tabIndex={0}
+        aria-label={t('pattern.uploadCustomPrompt')}
         onClick={() => inputRef.current?.click()}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
             inputRef.current?.click();
           }
         }}
-        role="button"
-        tabIndex={0}
-        aria-label={t('pattern.dropHere')}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          void handleFiles(event.dataTransfer.files);
+        }}
       >
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml"
-          hidden
-          onChange={(e) => {
-            void handleFiles(e.target.files);
-            e.target.value = '';
-          }}
-        />
-        <strong>{t('pattern.dropHere')}</strong>
-        <span>{t('pattern.formats')}</span>
+        <p className="dropzone-prompt">{t('pattern.uploadCustomPrompt')}</p>
+        <p className="dropzone-formats">{t('pattern.uploadFormatsHint')}</p>
       </div>
 
-      {pattern ? (
+      {allArtworks.length > 0 && (
+        <div style={{ margin: '10px 0 6px 0' }}>
+          <div className="cad-form-row">
+            <span className="cad-form-label" style={{ fontWeight: 600 }}>{t('pattern.activeArtwork')}</span>
+            <select
+              className="cad-select"
+              style={{ width: '160px', fontWeight: 600 }}
+              value={selectedArtworkId}
+              onChange={(e) => setSelectedArtworkId(e.target.value)}
+            >
+              {allArtworks.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.id === 'primary' ? t('pattern.primaryPrefix', { name: a.pattern.name }) : a.pattern.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {currentArtwork ? (
         <>
-          <div className="pattern-meta">
-            <span className="ellipsis" title={pattern.name}>
-              {pattern.name}
+          <div className="asset-row" style={{ marginTop: '4px' }}>
+            <span className="ellipsis" title={currentArtwork.name} style={{ fontWeight: 600 }}>
+              {currentArtwork.name}
             </span>
             <span className="muted">
-              {t('pattern.source')}: {pattern.originalWidth} × {pattern.originalHeight}{' '}
-              {t('units.px')}
+              {currentArtwork.width} × {currentArtwork.height} px
             </span>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              {pattern.kind !== 'svg' && vmProgress === null && (
-                <button
-                  type="button"
-                  className="link"
-                  style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--accent, #63d0ff)' }}
-                  onClick={openInVectorMagic}
-                  title={t('tooltip.vectorMagicDesktop')}
-                >
-                  {`✨ ${t('action.openVectorMagic')}`}
-                </button>
-              )}
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', margin: '6px 0' }}>
+            {vectorProgress === null ? (
               <button
                 type="button"
-                className="link"
-                onClick={() => {
-                  cancelVectorMagic();
-                  setPatternSource(null);
-                }}
+                className="cad-btn"
+                style={{ fontSize: '11px', padding: '3px 8px' }}
+                onClick={() => void runVectorizer()}
               >
-                {t('action.removePattern')}
+                ✨ {t('action.vectorize')}
               </button>
-            </div>
+            ) : (
+              <button
+                type="button"
+                className="cad-btn"
+                style={{ fontSize: '11px', padding: '3px 8px' }}
+                onClick={cancelVectorizer}
+              >
+                {t('action.cancel')}
+              </button>
+            )}
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                cancelVectorizer();
+                if (selectedArtworkId === 'primary') {
+                  setPatternSource(null);
+                } else {
+                  useStore.getState().removeRowPattern(selectedArtworkId);
+                  setSelectedArtworkId('primary');
+                }
+              }}
+            >
+              {t('action.removePattern')}
+            </button>
           </div>
-          {vmProgress !== null && (
-            <div className="vector-magic-progress" role="status" aria-live="polite">
-              <div className="vector-magic-progress-label">
-                <span>{t('pattern.vectorMagicProgress')}</span>
-                <span>{Math.round(vmProgress * 100)}%</span>
-              </div>
+
+          {vectorProgress !== null && (
+            <div className="vectorizer-progress-block" style={{ margin: '6px 0' }}>
               <div
                 className="progress-track"
                 role="progressbar"
-                aria-label={t('pattern.vectorMagicProgress')}
-                aria-valuenow={Math.round(vmProgress * 100)}
+                aria-label={t('pattern.vectorizerProgress')}
+                aria-valuenow={Math.round(vectorProgress * 100)}
                 aria-valuemin={0}
                 aria-valuemax={100}
-                data-stage={vmStage ?? 'launching'}
               >
                 <div
                   className="progress-fill"
-                  style={{ width: `${Math.max(2, vmProgress * 100)}%` }}
+                  style={{ width: `${Math.max(2, vectorProgress * 100)}%` }}
                 />
               </div>
             </div>
           )}
-          {vmStatus && <p className="notice" style={{ margin: '4px 0 8px 0' }}>{vmStatus}</p>}
 
           <Segmented<PreviewMode>
             value={previewMode}
@@ -267,132 +277,104 @@ export function PatternSection() {
             ]}
             onChange={setPreviewMode}
           />
-          <PatternCanvas pattern={pattern} mode={previewMode} />
-
-          <p className="muted small">
-            {t('summary.tileSize')}: {n(tile.width, 2)} × {n(tile.height, 2)}{' '}
-            {t('units.mm')}
-          </p>
+          <PatternCanvas
+            pattern={currentArtwork}
+            artworkId={selectedArtworkId}
+            mode={previewMode}
+          />
 
           {notice && <p className="notice">{notice}</p>}
           {lowResolution && <p className="notice">{t('warning.lowRes')}</p>}
           {seamWarning && <p className="notice">{t('warning.seam')}</p>}
+
+          <ImageAdjustments artworkId={selectedArtworkId} />
+          <RowPatternsSection />
         </>
       ) : (
         <p className="muted small">{t('pattern.none')}</p>
       )}
-
-      <div className="examples">
-        <span className="pseudo-label">{t('pattern.examples')}</span>
-        <div className="example-grid">
-          {EXAMPLE_PATTERNS.map((example) => (
-            <button
-              key={example.id}
-              type="button"
-              className="example"
-              title={example.description}
-              onClick={() => {
-                cancelVectorMagic();
-                setPatternSource(example.build(512));
-              }}
-            >
-              <ExampleThumb id={example.id} />
-              <span>{example.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <Toggle
-        label={t('field.invert')}
-        checked={patternSettings.invert}
-        onChange={(invert) => update({ invert })}
-        hint={t('tooltip.invert')}
-      />
-
-      {patternSettings.mode === 'binary' ? (
-        <>
-          <SliderField
-            label={t('field.threshold')}
-            value={patternSettings.threshold * 255}
-            onChange={(value) => update({ threshold: value / 255 })}
-            min={0}
-            max={255}
-            step={1}
-            decimals={0}
-            hint={t('tooltip.threshold')}
-          />
-          <NumberField
-            label={t('field.despeckle')}
-            value={patternSettings.despeckle}
-            onChange={(despeckle) => update({ despeckle: Math.round(despeckle) })}
-            min={0}
-            max={5000}
-            step={1}
-            decimals={0}
-            unit={t('units.px')}
-          />
-        </>
-      ) : null}
-
-      <ImageAdjustments />
-
     </Section>
   );
 }
 
-function ImageAdjustments() {
+function ImageAdjustments({ artworkId }: { artworkId: string }) {
   const { t } = useI18n();
-  const pattern = useStore((s) => s.settings.pattern);
-  const update = useStore((s) => s.updatePattern);
-  const resetPatternSettings = useStore((s) => s.updatePattern);
+  const patternSettings = useStore((s) => s.settings.pattern);
+  const updatePatternAdjustment = useStore((s) => s.updatePatternAdjustment);
+
+  const customAdj = patternSettings.patternAdjustments?.[artworkId] || {};
+  const isPrimary = artworkId === 'primary';
+
+  const brightness = customAdj.brightness ?? (isPrimary ? patternSettings.brightness : 0);
+  const contrast = customAdj.contrast ?? (isPrimary ? patternSettings.contrast : 0);
+  const gamma = customAdj.gamma ?? (isPrimary ? patternSettings.gamma : 1);
+  const blackPoint = customAdj.blackPoint ?? (isPrimary ? patternSettings.blackPoint : 0);
+  const whitePoint = customAdj.whitePoint ?? (isPrimary ? patternSettings.whitePoint : 1);
+  const blur = customAdj.blur ?? (isPrimary ? patternSettings.blur : 0);
+  const quantize = customAdj.quantize ?? (isPrimary ? patternSettings.quantize : 0);
+  const invert = customAdj.invert ?? (isPrimary ? patternSettings.invert : false);
+
+  const setAdj = (patch: Record<string, any>) => {
+    updatePatternAdjustment(artworkId, patch);
+  };
 
   return (
     <Section title={t('section.adjust')} defaultOpen={false}>
+      <div className="form-row" style={{ marginBottom: '8px' }}>
+        <span className="form-label">{t('field.invert') || 'Invert Polarity'}</span>
+        <label className="cad-switch">
+          <input
+            type="checkbox"
+            checked={invert}
+            onChange={(e) => setAdj({ invert: e.target.checked })}
+          />
+          <span className="cad-switch-track" />
+        </label>
+      </div>
       <SliderField
         label={t('field.brightness')}
-        value={pattern.brightness}
-        onChange={(brightness) => update({ brightness })}
+        value={brightness}
+        onChange={(v) => setAdj({ brightness: v })}
         min={-1}
         max={1}
         step={0.01}
       />
       <SliderField
         label={t('field.contrast')}
-        value={pattern.contrast}
-        onChange={(contrast) => update({ contrast })}
+        value={contrast}
+        onChange={(v) => setAdj({ contrast: v })}
         min={-1}
         max={1}
         step={0.01}
       />
       <SliderField
         label={t('field.gamma')}
-        value={pattern.gamma}
-        onChange={(gamma) => update({ gamma })}
+        value={gamma}
+        onChange={(v) => setAdj({ gamma: v })}
         min={0.1}
         max={4}
         step={0.05}
       />
       <SliderField
         label={t('field.blackPoint')}
-        value={pattern.blackPoint}
-        onChange={(blackPoint) => update({ blackPoint })}
+        value={blackPoint}
+        onChange={(v) => setAdj({ blackPoint: v })}
         min={0}
         max={0.99}
         step={0.01}
       />
       <SliderField
         label={t('field.whitePoint')}
-        value={pattern.whitePoint}
-        onChange={(whitePoint) => update({ whitePoint })}
+        value={whitePoint}
+        onChange={(v) => setAdj({ whitePoint: v })}
         min={0.01}
         max={1}
         step={0.01}
       />
       <SliderField
         label={t('field.blur')}
-        value={pattern.blur}
-        onChange={(blur) => update({ blur })}
+        value={blur}
+        onChange={(v) => setAdj({ blur: v })}
         min={0}
         max={16}
         step={1}
@@ -401,8 +383,8 @@ function ImageAdjustments() {
       />
       <SliderField
         label={t('field.quantize')}
-        value={pattern.quantize}
-        onChange={(quantize) => update({ quantize: Math.round(quantize) })}
+        value={quantize}
+        onChange={(v) => setAdj({ quantize: Math.round(v) })}
         min={0}
         max={16}
         step={1}
@@ -412,7 +394,7 @@ function ImageAdjustments() {
         type="button"
         className="link"
         onClick={() =>
-          resetPatternSettings({
+          setAdj({
             brightness: 0,
             contrast: 0,
             gamma: 1,
@@ -420,6 +402,7 @@ function ImageAdjustments() {
             whitePoint: 1,
             blur: 0,
             quantize: 0,
+            invert: false,
           })
         }
       >
@@ -435,22 +418,35 @@ function ImageAdjustments() {
 
 const PREVIEW_SIZE = 260;
 
-/**
- * Shows the artwork as it will actually be interpreted.
- *
- * "Processed" is the important one: it renders the exact mask the geometry
- * kernel receives, so thresholding, inversion and levels stop being guesswork.
- * "Tiled" draws a 3x3 block so a pattern that does not really tile is obvious
- * before anything is printed.
- */
-function PatternCanvas({ pattern, mode }: { pattern: RawPattern; mode: PreviewMode }) {
+function PatternCanvas({
+  pattern,
+  artworkId,
+  mode,
+}: {
+  pattern: RawPattern;
+  artworkId: string;
+  mode: PreviewMode;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const settings = useStore((s) => s.settings.pattern);
+  const patternSettings = useStore((s) => s.settings.pattern);
 
-  const processed = useMemo(
-    () => (mode === 'original' ? null : processPattern(pattern, settings)),
-    [pattern, settings, mode],
-  );
+  const processed = useMemo(() => {
+    if (mode === 'original') return null;
+    const customAdj = patternSettings.patternAdjustments?.[artworkId] || {};
+    const isPrimary = artworkId === 'primary';
+    const effectiveSettings = {
+      ...patternSettings,
+      brightness: customAdj.brightness ?? (isPrimary ? patternSettings.brightness : 0),
+      contrast: customAdj.contrast ?? (isPrimary ? patternSettings.contrast : 0),
+      gamma: customAdj.gamma ?? (isPrimary ? patternSettings.gamma : 1),
+      blackPoint: customAdj.blackPoint ?? (isPrimary ? patternSettings.blackPoint : 0),
+      whitePoint: customAdj.whitePoint ?? (isPrimary ? patternSettings.whitePoint : 1),
+      blur: customAdj.blur ?? (isPrimary ? patternSettings.blur : 0),
+      quantize: customAdj.quantize ?? (isPrimary ? patternSettings.quantize : 0),
+      invert: customAdj.invert ?? (isPrimary ? patternSettings.invert : false),
+    };
+    return processPattern(pattern, effectiveSettings);
+  }, [pattern, artworkId, patternSettings, mode]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -458,100 +454,398 @@ function PatternCanvas({ pattern, mode }: { pattern: RawPattern; mode: PreviewMo
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const { width, height } = pattern;
-    const repeats = mode === 'tiled' ? 3 : 1;
     canvas.width = PREVIEW_SIZE;
     canvas.height = PREVIEW_SIZE;
-    ctx.clearRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
-
-    const source = ctx.createImageData(width, height);
-    for (let i = 0; i < width * height; i++) {
-      let value: number;
-      if (mode === 'original') {
-        value = pattern.luminance[i];
-      } else {
-        // Show the mask the way the roller will read it: carved areas dark.
-        value = 255 - processed!.mask[i];
-      }
-      source.data[i * 4] = value;
-      source.data[i * 4 + 1] = value;
-      source.data[i * 4 + 2] = value;
-      source.data[i * 4 + 3] = 255;
-    }
-
-    const bitmapCanvas = document.createElement('canvas');
-    bitmapCanvas.width = width;
-    bitmapCanvas.height = height;
-    bitmapCanvas.getContext('2d')!.putImageData(source, 0, 0);
-
     ctx.imageSmoothingEnabled = false;
 
-    const cell = PREVIEW_SIZE / repeats;
-    for (let y = 0; y < repeats; y++) {
-      for (let x = 0; x < repeats; x++) {
-        ctx.drawImage(bitmapCanvas, x * cell, y * cell, cell, cell);
+    const offscreen = document.createElement('canvas');
+    const width = mode === 'original' ? pattern.width : (processed?.width ?? pattern.width);
+    const height = mode === 'original' ? pattern.height : (processed?.height ?? pattern.height);
+    offscreen.width = width;
+    offscreen.height = height;
+    const offCtx = offscreen.getContext('2d');
+    if (!offCtx) return;
+
+    const imgData = offCtx.createImageData(width, height);
+    const dst = imgData.data;
+
+    if (mode === 'original') {
+      const lum = pattern.luminance;
+      const alpha = pattern.alpha;
+      for (let i = 0; i < lum.length; i++) {
+        const v = lum[i];
+        const a = alpha ? alpha[i] : 255;
+        const o = i * 4;
+        dst[o] = v;
+        dst[o + 1] = v;
+        dst[o + 2] = v;
+        dst[o + 3] = a;
+      }
+    } else if (processed) {
+      const mask = processed.mask;
+      for (let i = 0; i < mask.length; i++) {
+        const v = 255 - mask[i];
+        const o = i * 4;
+        dst[o] = v;
+        dst[o + 1] = v;
+        dst[o + 2] = v;
+        dst[o + 3] = 255;
       }
     }
 
+    offCtx.putImageData(imgData, 0, 0);
+
+    ctx.clearRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
     if (mode === 'tiled') {
-      ctx.strokeStyle = 'rgba(99, 208, 255, 0.55)';
-      ctx.lineWidth = 1;
-      for (let i = 1; i < repeats; i++) {
-        ctx.beginPath();
-        ctx.moveTo(i * cell + 0.5, 0);
-        ctx.lineTo(i * cell + 0.5, PREVIEW_SIZE);
-        ctx.moveTo(0, i * cell + 0.5);
-        ctx.lineTo(PREVIEW_SIZE, i * cell + 0.5);
-        ctx.stroke();
+      const repeats = 3;
+      const step = PREVIEW_SIZE / repeats;
+      for (let y = 0; y < repeats; y++) {
+        for (let x = 0; x < repeats; x++) {
+          ctx.drawImage(offscreen, x * step, y * step, step, step);
+        }
       }
+    } else {
+      ctx.drawImage(offscreen, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
     }
   }, [pattern, processed, mode]);
 
-  return <canvas ref={canvasRef} className="pattern-canvas" />;
+  return (
+    <div className="pattern-canvas-frame" style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
+      <canvas
+        ref={canvasRef}
+        className="pattern-canvas"
+        style={{
+          width: `${PREVIEW_SIZE}px`,
+          height: `${PREVIEW_SIZE}px`,
+          borderRadius: 'var(--radius)',
+          border: '1px solid var(--border)',
+          background: '#0d1117',
+        }}
+      />
+    </div>
+  );
 }
 
-function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'));
-      return;
+function RowPatternsSection() {
+  const { t } = useI18n();
+  const settings = useStore((s) => s.settings);
+  const rows = Math.max(1, settings.pattern.rows || 1);
+  const rowPatternIds = settings.pattern.rowPatternIds || [];
+  const rowPatterns = useStore((s) => s.rowPatterns);
+  const addRowPatterns = useStore((s) => s.addRowPatterns);
+  const primaryPattern = useStore((s) => s.pattern);
+  const operations = useStore((s) => s.settings.operations);
+  const activeOp = operations.find((op) => op.targetPart === 'body' || op.targetPart === 'all') ?? operations[0];
+
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [activeUploadRow, setActiveUploadRow] = useState<number | null>(null);
+
+  const handleRowFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const result = await loadPatternFile(file, MAX_SOURCE_DIMENSION);
+      addRowPatterns([result.pattern]);
+      if (activeUploadRow !== null) {
+        if (activeOp) {
+          useStore.getState().setOperationRowPattern(activeOp.id, activeUploadRow, result.pattern);
+        } else {
+          const next = [...rowPatternIds];
+          while (next.length < rows) next.push(null);
+          next[activeUploadRow] = result.pattern.id;
+          useStore.getState().updatePattern({ rowPatternIds: next });
+        }
+      }
+    } catch {
+      // Ignored
     }
-    const onAbort = () => {
-      window.clearTimeout(timer);
-      reject(new DOMException('Aborted', 'AbortError'));
-    };
-    const timer = window.setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, milliseconds);
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
+  };
 
-function ExampleThumb({ id }: { id: string }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const rowAdjustments = useStore((s) => s.settings.pattern.rowAdjustments) || {};
+  const updateRowAdjustment = useStore((s) => s.updateRowAdjustment);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const example = EXAMPLE_PATTERNS.find((e) => e.id === id);
-    if (!example) return;
-    const size = 48;
-    const raw = example.build(size);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    canvas.width = size;
-    canvas.height = size;
-    const image = ctx.createImageData(size, size);
-    for (let i = 0; i < size * size; i++) {
-      const v = raw.luminance[i];
-      image.data[i * 4] = v;
-      image.data[i * 4 + 1] = v;
-      image.data[i * 4 + 2] = v;
-      image.data[i * 4 + 3] = 255;
-    }
-    ctx.putImageData(image, 0, 0);
-  }, [id]);
+  return (
+    <Section title={t('pattern.perRowSectionTitle')} defaultOpen={rows > 1}>
+      <p style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px' }}>
+        {t('pattern.perRowSectionDesc')}
+      </p>
 
-  return <canvas ref={canvasRef} className="example-thumb" aria-hidden="true" />;
+      <input
+        ref={fileRef}
+        type="file"
+        hidden
+        accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml"
+        onChange={(e) => {
+          void handleRowFile(e);
+          e.target.value = '';
+        }}
+      />
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {Array.from({ length: rows }).map((_, r) => {
+          const rowIdx = rows - 1 - r;
+          const rowNum = rows - r;
+          const assignedId = activeOp?.rowPatternIds?.[rowIdx] ?? rowPatternIds[rowIdx];
+          const patternObj = rowPatterns.find((p) => p.id === assignedId);
+          const displayName = patternObj?.name || (assignedId ? assignedId.replace('example:', '') : primaryPattern?.name || t('dock.defaultPattern'));
+          const isExpanded = expandedRow === rowIdx;
+          const adj = (activeOp?.rowAdjustments?.[rowIdx] || rowAdjustments[rowIdx]) || {};
+
+          const rowRot = adj.rotation !== undefined ? adj.rotation : (activeOp?.rotation ?? 0);
+          const rowBlur = adj.blur !== undefined ? adj.blur : (activeOp?.smoothing ?? 0);
+          const rowScale = adj.scaleX !== undefined ? Math.round(adj.scaleX * 100) : 100;
+          const rowOffsetU = adj.offsetX !== undefined ? Math.round(adj.offsetX * 100) : 0;
+          const rowInvert = adj.invert !== undefined ? adj.invert : (activeOp?.invert ?? false);
+          const rowBrightness = adj.brightness ?? 0;
+          const rowContrast = adj.contrast ?? 0;
+          const rowGamma = adj.gamma ?? 1;
+          const rowBlackPoint = adj.blackPoint ?? 0;
+          const rowWhitePoint = adj.whitePoint ?? 1;
+
+          return (
+            <div
+              key={r}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                background: 'var(--bg-input)',
+                borderRadius: '6px',
+                border: isExpanded ? '1px solid var(--blue)' : '1px solid var(--border)',
+                overflow: 'hidden',
+                fontSize: '11px',
+              }}
+            >
+              {/* Row Header Bar */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '6px',
+                  padding: '6px 8px',
+                  cursor: 'pointer',
+                  background: isExpanded ? 'rgba(59, 130, 246, 0.08)' : 'transparent',
+                }}
+                onClick={() => setExpandedRow(isExpanded ? null : rowIdx)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: '70px' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--blue)' }}>{t('dock.rowGeneric', { num: rowNum })}</span>
+                  <span style={{ fontSize: '9px', color: 'var(--text-faint)' }}>
+                    {rows > 1 ? (r === 0 ? `(${t('view.top')})` : r === rows - 1 ? `(${t('view.bottom')})` : '') : ''}
+                  </span>
+                </div>
+
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    color: assignedId ? 'var(--text-main)' : 'var(--text-dim)',
+                    fontWeight: assignedId ? 600 : 400,
+                  }}
+                  title={displayName}
+                >
+                  {displayName}
+                </span>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="cad-btn-icon"
+                    style={{ width: '20px', height: '20px' }}
+                    title={`Upload logo for Row ${rowNum}`}
+                    onClick={() => {
+                      setActiveUploadRow(rowIdx);
+                      fileRef.current?.click();
+                    }}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="17 8 12 3 7 8" />
+                      <line x1="12" y1="3" x2="12" y2="15" />
+                    </svg>
+                  </button>
+
+                  <select
+                    className="cad-select"
+                    style={{ fontSize: '10px', padding: '1px 4px', height: '20px', maxWidth: '85px' }}
+                    value={assignedId || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const nextPattern = val ? rowPatterns.find((p) => p.id === val) ?? null : null;
+                      if (activeOp) {
+                        useStore.getState().setOperationRowPattern(activeOp.id, rowIdx, nextPattern);
+                      } else {
+                        const next = [...rowPatternIds];
+                        while (next.length < rows) next.push(null);
+                        next[rowIdx] = val || null;
+                        useStore.getState().updatePattern({ rowPatternIds: next });
+                      }
+                    }}
+                  >
+                    <option value="">{t('dock.defaultPattern')}</option>
+                    {rowPatterns.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                    ))}
+                  </select>
+
+                  <button
+                    type="button"
+                    className="cad-btn-icon"
+                    style={{ width: '20px', height: '20px', transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
+                    title={isExpanded ? 'Collapse' : 'Expand'}
+                    onClick={() => setExpandedRow(isExpanded ? null : rowIdx)}
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* Expanded Per-Row Adjustments Panel */}
+              {isExpanded && (
+                <div style={{ padding: '8px 10px 10px 10px', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.1)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2px' }}>
+                    <span style={{ fontWeight: 600, fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--blue)' }}>
+                      {t('pattern.rowParamsTitle', { num: rowNum })}
+                    </span>
+                    <button
+                      type="button"
+                      className="link"
+                      style={{ fontSize: '10px' }}
+                      onClick={() => {
+                        updateRowAdjustment(rowIdx, {
+                          rotation: 0,
+                          blur: 0,
+                          scaleX: 1,
+                          scaleY: 1,
+                          offsetX: 0,
+                          offsetY: 0,
+                          invert: false,
+                          brightness: 0,
+                          contrast: 0,
+                          gamma: 1,
+                          blackPoint: 0,
+                          whitePoint: 1,
+                        });
+                      }}
+                    >
+                      {t('pattern.resetRowBtn')}
+                    </button>
+                  </div>
+
+                  {/* Invert */}
+                  <div className="form-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className="form-label" style={{ fontSize: '10.5px' }}>{t('pattern.invertPolarity')}</span>
+                    <label className="cad-switch">
+                      <input
+                        type="checkbox"
+                        checked={rowInvert}
+                        onChange={(e) => updateRowAdjustment(rowIdx, { invert: e.target.checked })}
+                      />
+                      <span className="cad-switch-track" />
+                    </label>
+                  </div>
+
+                  {/* Rotation */}
+                  <SliderField
+                    label={t('pattern.rotationDeg')}
+                    value={rowRot}
+                    onChange={(v) => updateRowAdjustment(rowIdx, { rotation: v })}
+                    min={0}
+                    max={360}
+                    step={1}
+                    decimals={0}
+                  />
+
+                  {/* Smoothing / Blur */}
+                  <SliderField
+                    label={t('pattern.smoothingBlurPx')}
+                    value={rowBlur}
+                    onChange={(v) => updateRowAdjustment(rowIdx, { blur: v })}
+                    min={0}
+                    max={20}
+                    step={0.5}
+                    decimals={1}
+                  />
+
+                  {/* Scale */}
+                  <SliderField
+                    label={t('pattern.scalePct')}
+                    value={rowScale}
+                    onChange={(v) => updateRowAdjustment(rowIdx, { scaleX: v / 100, scaleY: v / 100 })}
+                    min={10}
+                    max={300}
+                    step={5}
+                    decimals={0}
+                  />
+
+                  {/* Offset U */}
+                  <SliderField
+                    label={t('pattern.offsetUPct')}
+                    value={rowOffsetU}
+                    onChange={(v) => updateRowAdjustment(rowIdx, { offsetX: v / 100 })}
+                    min={-100}
+                    max={100}
+                    step={1}
+                    decimals={0}
+                  />
+
+                  {/* Image Adjustments */}
+                  <div style={{ marginTop: '4px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: '6px' }}>
+                      {t('pattern.rowImageLevels')}
+                    </span>
+                    <SliderField
+                      label={t('dock.brightness')}
+                      value={rowBrightness}
+                      onChange={(v) => updateRowAdjustment(rowIdx, { brightness: v })}
+                      min={-1}
+                      max={1}
+                      step={0.02}
+                    />
+                    <SliderField
+                      label={t('dock.contrast')}
+                      value={rowContrast}
+                      onChange={(v) => updateRowAdjustment(rowIdx, { contrast: v })}
+                      min={-1}
+                      max={1}
+                      step={0.02}
+                    />
+                    <SliderField
+                      label={t('dock.gamma')}
+                      value={rowGamma}
+                      onChange={(v) => updateRowAdjustment(rowIdx, { gamma: v })}
+                      min={0.1}
+                      max={4}
+                      step={0.05}
+                    />
+                    <SliderField
+                      label={t('dock.blackPoint')}
+                      value={rowBlackPoint}
+                      onChange={(v) => updateRowAdjustment(rowIdx, { blackPoint: v })}
+                      min={0}
+                      max={0.99}
+                      step={0.01}
+                    />
+                    <SliderField
+                      label={t('dock.whitePoint')}
+                      value={rowWhitePoint}
+                      onChange={(v) => updateRowAdjustment(rowIdx, { whitePoint: v })}
+                      min={0.01}
+                      max={1}
+                      step={0.01}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
 }

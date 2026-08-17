@@ -1,0 +1,240 @@
+{
+  "summary": {
+    "total": 45,
+    "passed": 45,
+    "warned": 0,
+    "failed": 0
+  },
+  "results": [
+    {
+      "category": "Viewport",
+      "feature": "WebGL 3D Canvas rendering",
+      "status": "PASS",
+      "details": "958x336px"
+    },
+    {
+      "category": "Status Bar",
+      "feature": "Status bar visibility",
+      "status": "PASS"
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "Project name rename",
+      "status": "PASS",
+      "details": "Renamed to \"My Custom Stein\""
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "Undo button present",
+      "status": "PASS"
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "Redo button present",
+      "status": "PASS"
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "Theme toggle (Dark -> Light)",
+      "status": "PASS"
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "Theme toggle (Light -> Dark)",
+      "status": "PASS"
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "Language switch (Español)",
+      "status": "PASS"
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "Language switch (English)",
+      "status": "PASS"
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "New Project button",
+      "status": "PASS"
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "Save Project button",
+      "status": "PASS"
+    },
+    {
+      "category": "Top Toolbar",
+      "feature": "Load Project button",
+      "status": "PASS"
+    },
+    {
+      "category": "Export Modal",
+      "feature": "Fullscreen Dimmed Export Modal open",
+      "status": "PASS"
+    },
+    {
+      "category": "Export Modal",
+      "feature": "Format options available (3MF, STL)",
+      "status": "PASS",
+      "details": "2 cards found"
+    },
+    {
+      "category": "Export Modal",
+      "feature": "Quality preset selection in export modal",
+      "status": "PASS"
+    },
+    {
+      "category": "Export Modal",
+      "feature": "Export Modal close",
+      "status": "PASS"
+    },
+    {
+      "category": "Nav Rail",
+      "feature": "Model Tab navigation",
+      "status": "PASS"
+    },
+    {
+      "category": "Nav Rail",
+      "feature": "Pattern Tab navigation",
+      "status": "PASS"
+    },
+    {
+      "category": "Pattern Tab",
+      "feature": "Dropzone artwork upload area",
+      "status": "PASS"
+    },
+    {
+      "category": "ViewCube",
+      "feature": "FRONT face camera snap",
+      "status": "PASS"
+    },
+    {
+      "category": "ViewCube",
+      "feature": "RIGHT face camera snap",
+      "status": "PASS"
+    },
+    {
+      "category": "ViewCube",
+      "feature": "TOP face camera snap",
+      "status": "PASS"
+    },
+    {
+      "category": "Tool Palette",
+      "feature": "Select tool activation",
+      "status": "PASS"
+    },
+    {
+      "category": "Tool Palette",
+      "feature": "Brush tool & Mask Settings HUD popover",
+      "status": "PASS"
+    },
+    {
+      "category": "Tool Palette",
+      "feature": "Bucket fill tool activation",
+      "status": "PASS"
+    },
+    {
+      "category": "Tool Palette",
+      "feature": "Erase tool activation",
+      "status": "PASS"
+    },
+    {
+      "category": "Viewport Overlay",
+      "feature": "50 mm Scale Bar",
+      "status": "PASS"
+    },
+    {
+      "category": "Operations Stack",
+      "feature": "+ Add Operation creation",
+      "status": "PASS"
+    },
+    {
+      "category": "Operations Stack",
+      "feature": "Operations list count (5)",
+      "status": "PASS"
+    },
+    {
+      "category": "Dock Tabs",
+      "feature": "Operation Settings Tab navigation",
+      "status": "PASS"
+    },
+    {
+      "category": "Operation Settings",
+      "feature": "Target Part: Top Rim selection",
+      "status": "PASS"
+    },
+    {
+      "category": "Operation Settings",
+      "feature": "Target Part: Body Wall selection",
+      "status": "PASS"
+    },
+    {
+      "category": "Operation Settings",
+      "feature": "Depth adjustment (1.8 mm)",
+      "status": "PASS"
+    },
+    {
+      "category": "Dock Tabs",
+      "feature": "Texture & Presets Tab navigation",
+      "status": "PASS"
+    },
+    {
+      "category": "Preset Library",
+      "feature": "Preset gallery cards found (13)",
+      "status": "PASS"
+    },
+    {
+      "category": "Preset Library",
+      "feature": "Apply texture preset to active operation",
+      "status": "PASS"
+    },
+    {
+      "category": "Dock Tabs",
+      "feature": "Pattern Layout Tab navigation",
+      "status": "PASS"
+    },
+    {
+      "category": "Pattern Layout",
+      "feature": "Proportional 1:1 aspect lock toggle",
+      "status": "PASS"
+    },
+    {
+      "category": "Dock Tabs",
+      "feature": "Mask Tab navigation",
+      "status": "PASS"
+    },
+    {
+      "category": "Dock Tabs",
+      "feature": "Transform Tab navigation",
+      "status": "PASS"
+    },
+    {
+      "category": "Transform Tab",
+      "feature": "Reset Transform button",
+      "status": "PASS"
+    },
+    {
+      "category": "Right Panel",
+      "feature": "Validation & Stats panel visibility",
+      "status": "PASS"
+    },
+    {
+      "category": "Right Panel",
+      "feature": "Engineering validation check items (6)",
+      "status": "PASS"
+    },
+    {
+      "category": "Right Panel",
+      "feature": "Geometric & Mesh metrics rows (12)",
+      "status": "PASS"
+    },
+    {
+      "category": "Console Health",
+      "feature": "Zero JavaScript runtime errors",
+      "status": "PASS",
+      "details": "Clean console log"
+    }
+  ],
+  "consoleErrors": []
+}
